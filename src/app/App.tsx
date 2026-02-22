@@ -13,12 +13,13 @@ import { QuickLogScreen } from '@/app/components/QuickLogScreen';
 import { RegisterScreen } from '@/app/components/RegisterScreen';
 import { WeatherScreen } from '@/app/components/WeatherScreen';
 import { WebcamScreen } from '@/app/components/WebcamScreen';
-import { exchangeCodeForSession } from '@/lib/auth';
+import { clearAuthMode, exchangeCodeForSession, getAuthMode } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import type { Session } from '@supabase/supabase-js';
 import { useEffect, useState } from 'react';
 
 const SCREEN_STORAGE_KEY = 'pelagos_current_screen';
+const AUTH_ERROR_KEY = 'pelagos_auth_error';
 const VALID_SCREENS: Screen[] = ['home', 'log', 'gallery', 'map', 'profile', 'quicklog', 'weather', 'webcam', 'community', 'marketplace', 'messages', 'admin'];
 
 function getStoredScreen(): Screen | null {
@@ -29,6 +30,20 @@ function getStoredScreen(): Screen | null {
     /* ignore */
   }
   return null;
+}
+
+function setAuthError(error: string | null) {
+  if (error) {
+    sessionStorage.setItem(AUTH_ERROR_KEY, error);
+  } else {
+    sessionStorage.removeItem(AUTH_ERROR_KEY);
+  }
+}
+
+export function getAuthError(): string | null {
+  const error = sessionStorage.getItem(AUTH_ERROR_KEY);
+  sessionStorage.removeItem(AUTH_ERROR_KEY);
+  return error;
 }
 
 function App() {
@@ -101,23 +116,36 @@ function App() {
 
           if (code) {
             try {
+              const authMode = getAuthMode();
+              clearAuthMode();
+              
               await exchangeCodeForSession();
-              // Limpiar URL
               window.history.replaceState({}, '', '/');
               
-              // Obtener la nueva sesión
               const { data: { session: newSession } } = await supabase.auth.getSession();
               if (newSession && mounted) {
-                setSession(newSession);
                 const hasName = await checkProfileHasName(newSession.user.id);
-                if (!mounted) return;
-                setNeedsOnboarding(!hasName);
-                if (hasName) {
-                  setCurrentScreen(getStoredScreen() ?? 'home');
+                
+                if (authMode === 'login' && !hasName) {
+                  // Usuario intentó iniciar sesión pero no tiene cuenta creada
+                  await supabase.auth.signOut();
+                  setAuthError('Esta cuenta no está registrada. Por favor, crea una cuenta primero.');
+                  if (mounted) {
+                    setSession(null);
+                    setCurrentScreen('register');
+                  }
+                } else {
+                  setSession(newSession);
+                  if (!mounted) return;
+                  setNeedsOnboarding(!hasName);
+                  if (hasName) {
+                    setCurrentScreen(getStoredScreen() ?? 'home');
+                  }
                 }
               }
             } catch {
               window.history.replaceState({}, '', '/');
+              clearAuthMode();
             }
           }
         }

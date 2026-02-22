@@ -10,6 +10,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/app/components/ui/select';
+import { getAuthError } from '@/app/App';
 import { signInWithGoogle } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { ChevronLeft, ChevronRight, Mail } from 'lucide-react';
@@ -126,14 +127,29 @@ export function RegisterScreen({ onNavigate, onBack }: RegisterScreenProps) {
   const [isSendingReset, setIsSendingReset] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
-  const handleGoogleSignIn = async () => {
+  // Verificar si hay error de autenticación al cargar
+  const [authErrorChecked, setAuthErrorChecked] = useState(false);
+  if (!authErrorChecked) {
+    const authError = getAuthError();
+    if (authError) {
+      setLoginError(authError);
+    }
+    setAuthErrorChecked(true);
+  }
+
+  const handleGoogleSignIn = async (mode: 'login' | 'register') => {
     setLoginError(null);
+    setRegisterError(null);
     setGoogleLoading(true);
     try {
-      await signInWithGoogle();
-      // Redirige a Google; al volver, App.tsx procesa el code
+      await signInWithGoogle(mode);
     } catch (e) {
-      setLoginError(e instanceof Error ? e.message : 'Error al conectar con Gmail');
+      const errorMsg = e instanceof Error ? e.message : 'Error al conectar con Gmail';
+      if (mode === 'login') {
+        setLoginError(errorMsg);
+      } else {
+        setRegisterError(errorMsg);
+      }
       setGoogleLoading(false);
     }
   };
@@ -389,7 +405,7 @@ export function RegisterScreen({ onNavigate, onBack }: RegisterScreenProps) {
                     <p className="text-cyan-100 text-xs font-medium">Entrar con Gmail</p>
                     <button
                       type="button"
-                      onClick={handleGoogleSignIn}
+                      onClick={() => handleGoogleSignIn('login')}
                       disabled={googleLoading}
                       className="w-full h-12 rounded-xl flex items-center justify-center gap-2 bg-white hover:bg-gray-100 text-gray-800 font-semibold border-2 border-gray-200 shadow-md disabled:opacity-60 text-base"
                     >
@@ -471,7 +487,7 @@ export function RegisterScreen({ onNavigate, onBack }: RegisterScreenProps) {
                     <p className="text-cyan-100 text-xs font-medium">Crear cuenta con Gmail</p>
                     <button
                       type="button"
-                      onClick={handleGoogleSignIn}
+                      onClick={() => handleGoogleSignIn('register')}
                       disabled={googleLoading}
                       className="w-full h-12 rounded-xl flex items-center justify-center gap-2 bg-white hover:bg-gray-100 text-gray-800 font-semibold border-2 border-gray-200 shadow-md disabled:opacity-60 text-base"
                     >

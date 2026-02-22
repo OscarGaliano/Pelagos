@@ -1,18 +1,33 @@
 import { supabase } from '@/lib/supabase';
 
 export const AUTH_CALLBACK_PATH = '/auth/callback';
+export const AUTH_MODE_KEY = 'pelagos_auth_mode';
 
 const getRedirectUrl = () => {
   return `${window.location.origin}${AUTH_CALLBACK_PATH}`;
 };
 
-export async function signInWithGoogle() {
+export function setAuthMode(mode: 'register' | 'login') {
+  localStorage.setItem(AUTH_MODE_KEY, mode);
+}
+
+export function getAuthMode(): 'register' | 'login' | null {
+  return localStorage.getItem(AUTH_MODE_KEY) as 'register' | 'login' | null;
+}
+
+export function clearAuthMode() {
+  localStorage.removeItem(AUTH_MODE_KEY);
+}
+
+export async function signInWithGoogle(mode: 'register' | 'login' = 'login') {
+  setAuthMode(mode);
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: { redirectTo: getRedirectUrl() },
   });
   if (error) {
     console.error('Error con Google:', error);
+    clearAuthMode();
     throw error;
   }
 }

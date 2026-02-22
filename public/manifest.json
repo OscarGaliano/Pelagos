@@ -1,0 +1,19 @@
+{
+  "name": "Pelagos - Pesca submarina",
+  "short_name": "Pelagos",
+  "description": "Condiciones, mareas, registro de jornadas y comunidad para pesca submarina.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a1628",
+  "theme_color": "#0891b2",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["sports", "lifestyle"]
+}

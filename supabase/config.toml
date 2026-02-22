@@ -1,0 +1,9 @@
+# Configuración del proyecto Supabase (CLI)
+# Para que las Edge Functions getZonaConditions y getZonaTides acepten
+# llamadas con anon key sin requerir usuario logueado (Condiciones y Mareas).
+
+[functions.getZonaConditions]
+verify_jwt = false
+
+[functions.getZonaTides]
+verify_jwt = false

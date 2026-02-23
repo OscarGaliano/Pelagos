@@ -1,3 +1,4 @@
+import { getAuthError } from '@/app/App';
 import { Button } from '@/app/components/ui/button';
 import { Checkbox } from '@/app/components/ui/checkbox';
 import { Input } from '@/app/components/ui/input';
@@ -10,7 +11,6 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/app/components/ui/select';
-import { getAuthError } from '@/app/App';
 import { signInWithGoogle } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { ChevronLeft, ChevronRight, Mail } from 'lucide-react';

@@ -8,7 +8,7 @@
     "dev": "vite",
     "db:migrate": "node scripts/run-migrations.js",
     "supabase": "supabase",
-    "functions:deploy": "supabase functions deploy getZonaConditions --no-verify-jwt && supabase functions deploy getZonaTides --no-verify-jwt",
+    "functions:deploy": "supabase functions deploy getZonaConditions --no-verify-jwt && supabase functions deploy getZonaTides --no-verify-jwt && supabase functions deploy deleteUser",
     "cap:sync": "npm run build && npx cap sync",
     "cap:ios": "npm run cap:sync && npx cap open ios",
     "cap:android": "npm run cap:sync && npx cap open android"

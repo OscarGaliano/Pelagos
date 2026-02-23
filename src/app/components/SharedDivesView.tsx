@@ -648,7 +648,6 @@ function CreateDiveModal({
                   <input
                     type="file"
                     accept="image/*"
-                    capture="environment"
                     className="hidden"
                     onChange={handlePhotoSelect}
                   />
@@ -680,7 +679,6 @@ function CreateDiveModal({
                 <input
                   type="file"
                   accept="video/*"
-                  capture="environment"
                   className="hidden"
                   onChange={handleVideoSelect}
                 />

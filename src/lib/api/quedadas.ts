@@ -1,3 +1,4 @@
+import { createNotification } from '@/lib/api/notifications';
 import { supabase } from '@/lib/supabase';
 import type { Quedada } from '@/lib/types';
 
@@ -330,16 +331,27 @@ export async function joinOpen(quedadaId: string, userId: string) {
 }
 
 export async function requestToJoin(quedadaId: string, userId: string) {
+  const { data: q } = await supabase.from('quedadas').select('admin_id, title').eq('id', quedadaId).single();
+  if (!q) throw new Error('Quedada no encontrada');
   const { error } = await supabase.from('quedada_join_requests').insert({
     quedada_id: quedadaId,
     user_id: userId,
     status: 'pending',
   });
   if (error) throw error;
+  const { data: requester } = await supabase.from('profiles').select('display_name').eq('id', userId).single();
+  const name = (requester as { display_name?: string } | null)?.display_name ?? 'Un usuario';
+  await createNotification(
+    (q as { admin_id: string }).admin_id,
+    'quedada_join_request',
+    'Nueva solicitud',
+    `${name} quiere unirse a la quedada "${(q as { title?: string }).title ?? 'Sin título'}"`,
+    { quedada_id: quedadaId, user_id: userId }
+  );
 }
 
 export async function acceptJoinRequest(quedadaId: string, adminId: string, userId: string) {
-  const { data: q } = await supabase.from('quedadas').select('max_participants').eq('id', quedadaId).single();
+  const { data: q } = await supabase.from('quedadas').select('max_participants, title').eq('id', quedadaId).single();
   if (q) {
     const { count } = await supabase.from('quedada_participants').select('*', { count: 'exact', head: true }).eq('quedada_id', quedadaId);
     if (q.max_participants != null && (count ?? 0) >= q.max_participants) throw new Error('Plazas completas');
@@ -356,15 +368,32 @@ export async function acceptJoinRequest(quedadaId: string, adminId: string, user
     role: 'participant',
   });
   if (ins) throw ins;
+  const title = (q as { title?: string } | null)?.title ?? 'la quedada';
+  await createNotification(
+    userId,
+    'quedada_request_accepted',
+    'Solicitud aceptada',
+    `Tu solicitud para unirte a "${title}" ha sido aceptada`,
+    { quedada_id: quedadaId }
+  );
 }
 
 export async function denyJoinRequest(quedadaId: string, adminId: string, userId: string) {
+  const { data: q } = await supabase.from('quedadas').select('title').eq('id', quedadaId).single();
   const { error } = await supabase
     .from('quedada_join_requests')
     .update({ status: 'denied', reviewed_at: new Date().toISOString(), reviewed_by: adminId })
     .eq('quedada_id', quedadaId)
     .eq('user_id', userId);
   if (error) throw error;
+  const title = (q as { title?: string } | null)?.title ?? 'la quedada';
+  await createNotification(
+    userId,
+    'quedada_request_rejected',
+    'Solicitud denegada',
+    `Tu solicitud para unirte a "${title}" ha sido denegada`,
+    { quedada_id: quedadaId }
+  );
 }
 
 export async function leaveQuedada(quedadaId: string, userId: string) {

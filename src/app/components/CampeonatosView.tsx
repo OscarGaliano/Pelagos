@@ -948,7 +948,6 @@ function RegisterCaptureBlock({
               <input
                 type="file"
                 accept="image/*"
-                capture="environment"
                 onChange={(e) => setRowImage(row.id, e.target.files?.[0] ?? null)}
                 className="w-full rounded-lg bg-white/10 border border-cyan-400/30 px-3 py-2 text-white text-sm file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-cyan-500/30 file:text-cyan-200 file:text-xs"
               />

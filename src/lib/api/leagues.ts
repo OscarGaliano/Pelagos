@@ -1,3 +1,4 @@
+import { createNotification } from '@/lib/api/notifications';
 import { supabase } from '@/lib/supabase';
 import type {
     League,
@@ -375,27 +376,53 @@ export async function leaveLeague(leagueId: string, userId: string): Promise<voi
 }
 
 export async function requestToJoinLeague(leagueId: string, userId: string): Promise<void> {
+  const { data: league, error: leagueErr } = await supabase.from('leagues').select('admin_id, name').eq('id', leagueId).single();
+  if (leagueErr || !league) throw new Error('Liga no encontrada');
   const { error } = await supabase.from('league_join_requests').insert({ league_id: leagueId, user_id: userId, status: 'pending' });
   if (error) throw error;
+  const { data: requester } = await supabase.from('profiles').select('display_name').eq('id', userId).single();
+  const name = (requester as { display_name?: string } | null)?.display_name ?? 'Un usuario';
+  await createNotification(
+    (league as { admin_id: string }).admin_id,
+    'league_join_request',
+    'Nueva solicitud',
+    `${name} quiere unirse a "${(league as { name: string }).name}"`,
+    { league_id: leagueId, user_id: userId }
+  );
 }
 
 export async function acceptJoinRequest(leagueId: string, adminId: string, requestingUserId: string): Promise<void> {
-  const { data: league } = await supabase.from('leagues').select('admin_id, max_participants').eq('id', leagueId).single();
+  const { data: league } = await supabase.from('leagues').select('admin_id, max_participants, name').eq('id', leagueId).single();
   if (!league || (league as { admin_id: string }).admin_id !== adminId) throw new Error('No autorizado');
   const max = (league as { max_participants: number | null }).max_participants;
   const { count } = await supabase.from('league_participants').select('*', { count: 'exact', head: true }).eq('league_id', leagueId);
   if (max != null && (count ?? 0) >= max) throw new Error('La liga está completa');
   await supabase.from('league_join_requests').update({ status: 'accepted', reviewed_at: new Date().toISOString(), reviewed_by: adminId }).eq('league_id', leagueId).eq('user_id', requestingUserId);
   await supabase.from('league_participants').insert({ league_id: leagueId, user_id: requestingUserId });
+  await createNotification(
+    requestingUserId,
+    'league_request_accepted',
+    'Solicitud aceptada',
+    `Tu solicitud para unirte a "${(league as { name: string }).name}" ha sido aceptada`,
+    { league_id: leagueId }
+  );
 }
 
 export async function denyJoinRequest(leagueId: string, adminId: string, requestingUserId: string): Promise<void> {
+  const { data: league } = await supabase.from('leagues').select('name').eq('id', leagueId).single();
   const { error } = await supabase
     .from('league_join_requests')
     .update({ status: 'denied', reviewed_at: new Date().toISOString(), reviewed_by: adminId })
     .eq('league_id', leagueId)
     .eq('user_id', requestingUserId);
   if (error) throw error;
+  await createNotification(
+    requestingUserId,
+    'league_request_rejected',
+    'Solicitud denegada',
+    `Tu solicitud para unirte a "${(league as { name: string } | null)?.name ?? 'la liga'}" ha sido denegada`,
+    { league_id: leagueId }
+  );
 }
 
 export async function inviteToLeague(leagueId: string, adminId: string, invitedUserId: string): Promise<void> {

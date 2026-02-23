@@ -18,11 +18,11 @@ import {
 } from '@/app/components/ui/select';
 import { Switch } from '@/app/components/ui/switch';
 import { getDives } from '@/lib/api/dives';
-import { ensureProfile, formatFishingModalities, getProfile, updateProfile, uploadAvatar } from '@/lib/api/profiles';
+import { deleteAccount, ensureProfile, formatFishingModalities, getProfile, updateProfile, uploadAvatar } from '@/lib/api/profiles';
 import { supabase } from '@/lib/supabase';
 import type { Dive, Profile } from '@/lib/types';
 import type { User } from '@supabase/supabase-js';
-import { Award, Calendar, Camera, ChevronLeft, Fish, MapPin, Pencil, Phone, Shield, User as UserIcon } from 'lucide-react';
+import { Award, Calendar, Camera, ChevronLeft, Fish, MapPin, Pencil, Phone, Shield, Trash2, User as UserIcon } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 
@@ -57,6 +57,9 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
   const [editLocation, setEditLocation] = useState('');
   const [editFishingInfantry, setEditFishingInfantry] = useState(true);
   const [editFishingBoat, setEditFishingBoat] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
   const loadUserAndProfile = async () => {
     const { data: { user: u } } = await supabase.auth.getUser();
@@ -430,17 +433,76 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
       </div>
 
       {/* Seguridad */}
-      <div className="px-6 pb-8">
+      <div className="px-6 pb-6">
         <h3 className="text-white text-lg mb-3 flex items-center gap-2">
           <Shield className="w-5 h-5 text-cyan-400" />
           Configuración de Seguridad
         </h3>
         <div className="backdrop-blur-xl bg-white/5 rounded-2xl p-5 border border-cyan-400/20">
-          <p className="text-cyan-300/70 text-sm">
+          <p className="text-cyan-300/70 text-sm mb-4">
             {user ? 'Contacto de emergencia y preferencias se editan en "Editar datos".' : 'Inicia sesión para configurar contacto de emergencia y preferencias.'}
           </p>
+          {user && (
+            <button
+              type="button"
+              onClick={() => setShowDeleteConfirm(true)}
+              className="flex items-center gap-2 text-red-400 hover:text-red-300 text-sm"
+            >
+              <Trash2 className="w-4 h-4" />
+              Eliminar cuenta
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Modal eliminar cuenta */}
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent className="bg-[#0c1f3a] border-cyan-400/20 text-white max-w-[calc(100%-2rem)]">
+          <DialogHeader>
+            <DialogTitle className="text-white">Eliminar cuenta</DialogTitle>
+          </DialogHeader>
+          <p className="text-cyan-200/90 text-sm py-2">
+            Esta acción es irreversible. Se eliminarán todos tus datos (perfil, jornadas, publicaciones, etc.). Escribe <strong>ELIMINAR</strong> para confirmar.
+          </p>
+          <Input
+            className="bg-white/10 border-cyan-400/30 text-white placeholder:text-white/50"
+            placeholder="Escribe ELIMINAR"
+            value={deleteConfirmText}
+            onChange={(e) => setDeleteConfirmText(e.target.value)}
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="bg-white/10 border-cyan-400/30 text-white hover:bg-white/20"
+              onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmText(''); }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              className="bg-red-600 hover:bg-red-700"
+              disabled={deleteConfirmText !== 'ELIMINAR' || deleting}
+              onClick={async () => {
+                if (deleteConfirmText !== 'ELIMINAR') return;
+                setDeleting(true);
+                try {
+                  await deleteAccount();
+                  await supabase.auth.signOut();
+                  setShowDeleteConfirm(false);
+                  setDeleteConfirmText('');
+                  loadUserAndProfile();
+                } catch (e) {
+                  alert((e as Error).message ?? 'Error al eliminar la cuenta');
+                } finally {
+                  setDeleting(false);
+                }
+              }}
+            >
+              {deleting ? 'Eliminando…' : 'Eliminar cuenta'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Modal Editar datos */}
       <Dialog open={editing} onOpenChange={setEditing}>

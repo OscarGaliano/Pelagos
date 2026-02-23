@@ -74,6 +74,14 @@ export async function updateProfile(
   return data;
 }
 
+/** Solicita eliminar la cuenta del usuario actual. Llama a la Edge Function que usa Admin API. */
+export async function deleteAccount(): Promise<void> {
+  const { data, error } = await supabase.functions.invoke('deleteUser', { method: 'POST' });
+  if (error) throw error;
+  const body = data as { error?: string } | null;
+  if (body?.error) throw new Error(body.error);
+}
+
 /** Sube una imagen como avatar y devuelve la URL pública. Actualiza el perfil con esa URL. */
 export async function uploadAvatar(userId: string, file: File): Promise<string> {
   const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';

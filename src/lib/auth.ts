@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 export const AUTH_CALLBACK_PATH = '/auth/callback';
 export const AUTH_MODE_KEY = 'pelagos_auth_mode';
 
+/** Redirect para OAuth: usa el origen actual (local o Vercel). En Supabase → Auth → URL Configuration añade las Redirect URLs de local (ej. http://127.0.0.1:5178/auth/callback). Ver docs/SUPABASE_LOCAL_Y_VERCEL.md */
 const getRedirectUrl = () => {
   return `${window.location.origin}${AUTH_CALLBACK_PATH}`;
 };

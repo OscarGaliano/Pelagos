@@ -124,8 +124,22 @@
     @apply border-border outline-ring/50;
   }
 
+  html {
+    -webkit-text-size-adjust: 100%;
+    min-height: 100%;
+    min-height: 100dvh;
+  }
+
   body {
     @apply bg-background text-foreground;
+    min-height: 100%;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  #root {
+    min-height: 100%;
+    min-height: 100dvh;
   }
 
   /**
@@ -178,4 +192,14 @@
     font-weight: var(--font-weight-normal);
     line-height: 1.5;
   }
+}
+
+/* Carrusel de fondo en página principal: ocupar toda la altura */
+.home-bg-carousel .slick-slider,
+.home-bg-carousel .slick-list,
+.home-bg-carousel .slick-track {
+  height: 100% !important;
+}
+.home-bg-carousel .slick-slide > div {
+  height: 100% !important;
 }

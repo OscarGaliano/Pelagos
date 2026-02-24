@@ -52,8 +52,9 @@ export async function createDive(dive: {
 export async function addCatch(catchData: {
   dive_id: string;
   species: string;
-  weight_kg?: number;
-  image_url?: string;
+  weight_kg?: number | null;
+  length_cm?: number | null;
+  image_url?: string | null;
 }) {
   const { data, error } = await supabase.from('catches').insert(catchData).select().single();
   if (error) throw error;
@@ -109,6 +110,7 @@ export interface CatchWithDive {
   dive_id: string;
   species: string;
   weight_kg: number | null;
+  length_cm: number | null;
   image_url: string | null;
   created_at: string;
   dive?: { dive_date: string; location_name: string | null };
@@ -152,7 +154,7 @@ export async function getCatchesByDiveSpotId(spotId: string): Promise<CatchAtSpo
 export async function getCatchesWithImages(userId: string): Promise<CatchWithDive[]> {
   const { data: dives, error } = await supabase
     .from('dives')
-    .select('id, dive_date, location_name, catches(id, dive_id, species, weight_kg, image_url, created_at)')
+    .select('id, dive_date, location_name, catches(id, dive_id, species, weight_kg, length_cm, image_url, created_at)')
     .eq('user_id', userId)
     .order('dive_date', { ascending: false });
   if (error) throw error;
@@ -171,7 +173,7 @@ export async function getCatchesWithImages(userId: string): Promise<CatchWithDiv
 
 export async function updateCatch(
   catchId: string,
-  updates: { image_url?: string | null }
+  updates: { image_url?: string | null; weight_kg?: number | null; length_cm?: number | null }
 ) {
   const { data, error } = await supabase
     .from('catches')

@@ -1,3 +1,4 @@
+import { StoryViewer } from '@/app/components/StoryViewer';
 import { Button } from '@/app/components/ui/button';
 import { Checkbox } from '@/app/components/ui/checkbox';
 import {
@@ -18,13 +19,15 @@ import {
 } from '@/app/components/ui/select';
 import { Switch } from '@/app/components/ui/switch';
 import { getDives } from '@/lib/api/dives';
-import { deleteAccount, ensureProfile, formatFishingModalities, getProfile, updateProfile, uploadAvatar } from '@/lib/api/profiles';
+import { deleteAccount, ensureProfile, formatFishingModalities, getDistinctLocations, getProfile, updateProfile, uploadAvatar } from '@/lib/api/profiles';
+import { getStoriesFeed, type StoriesByUser } from '@/lib/api/sharedDives';
+import { extractCityFromLocation } from '@/lib/cityUtils';
 import { supabase } from '@/lib/supabase';
 import type { Dive, Profile } from '@/lib/types';
 import type { User } from '@supabase/supabase-js';
 import { Award, Calendar, Camera, ChevronLeft, Fish, MapPin, Pencil, Phone, Shield, Trash2, User as UserIcon } from 'lucide-react';
-import { motion } from 'motion/react';
-import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const EXPERIENCE_LEVELS = [
   { value: 'principiante', label: 'Principiante' },
@@ -58,6 +61,10 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
   const [editFishingInfantry, setEditFishingInfantry] = useState(true);
   const [editFishingBoat, setEditFishingBoat] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
+  const [myStories, setMyStories] = useState<StoriesByUser[]>([]);
+  const [storiesLoading, setStoriesLoading] = useState(false);
+  const [storyViewerOpen, setStoryViewerOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
@@ -84,6 +91,24 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
     loadUserAndProfile();
   }, []);
 
+  const loadMyStories = useCallback(async () => {
+    if (!user?.id) return;
+    setStoriesLoading(true);
+    try {
+      const feed = await getStoriesFeed(user.id, user.id);
+      setMyStories(feed);
+    } catch {
+      setMyStories([]);
+    } finally {
+      setStoriesLoading(false);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (user?.id) loadMyStories();
+    else setMyStories([]);
+  }, [user?.id, loadMyStories]);
+
   const displayName =
     profile?.display_name
     || user?.user_metadata?.full_name
@@ -103,6 +128,7 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
     setEditFishingInfantry(profile?.fishing_infantry ?? true);
     setEditFishingBoat(profile?.fishing_boat ?? false);
     setEditing(true);
+    getDistinctLocations().then(setLocationSuggestions).catch(() => setLocationSuggestions([]));
   };
 
   const saveProfile = async () => {
@@ -142,7 +168,7 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
     const fields = [
       { name: 'Nombre', value: profile.display_name },
       { name: 'Tipo de pesca', value: profile.fishing_infantry || profile.fishing_boat },
-      { name: 'Ubicación', value: profile.location },
+      { name: 'Ciudad', value: profile?.location ? extractCityFromLocation(profile.location) : '' },
       { name: 'Teléfono', value: profile.phone },
       { name: 'Foto de perfil', value: profile.avatar_url },
       { name: 'Contacto de emergencia', value: profile.emergency_contact },
@@ -350,12 +376,12 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
                 <span className="text-white">{profile.phone}</span>
               </div>
             )}
-            {profile?.location && (
+            {(profile?.location && extractCityFromLocation(profile.location)) ? (
               <div className="flex justify-between text-sm items-center gap-2">
-                <span className="text-cyan-300/70 flex items-center gap-1"><MapPin className="w-4 h-4" /> Zona</span>
-                <span className="text-white">{profile.location}</span>
+                <span className="text-cyan-300/70 flex items-center gap-1"><MapPin className="w-4 h-4" /> Ciudad</span>
+                <span className="text-white">{extractCityFromLocation(profile.location)}</span>
               </div>
-            )}
+            ) : null}
             {profile?.emergency_contact && (
               <div className="flex justify-between text-sm">
                 <span className="text-cyan-300/70">Contacto emergencia</span>
@@ -374,6 +400,50 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
               <span className="text-cyan-300/70">Tipo de pesca</span>
               <span className="text-white text-right">{formatFishingModalities(profile)}</span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mis historias (jornadas compartidas últimas 24h) */}
+      {user && (
+        <div className="px-6 pb-6">
+          <h3 className="text-white text-lg mb-3">Mis historias</h3>
+          <div className="backdrop-blur-xl bg-white/5 rounded-2xl border border-cyan-400/15 overflow-hidden p-4">
+            {storiesLoading ? (
+              <p className="text-cyan-300/70 text-sm">Cargando...</p>
+            ) : myStories.length === 0 || myStories[0]?.stories?.length === 0 ? (
+              <p className="text-cyan-300/70 text-sm">
+                Comparte jornadas desde &quot;Compartir jornada&quot; en Comunidad para publicar historias (visible 24 h).
+              </p>
+            ) : (
+              <motion.button
+                type="button"
+                onClick={() => setStoryViewerOpen(true)}
+                whileTap={{ scale: 0.97 }}
+                className="flex items-center gap-3 w-full text-left"
+              >
+                <div className="relative shrink-0">
+                  <div className="w-14 h-14 rounded-full overflow-hidden border-2 border-cyan-400/60 bg-cyan-500/20 flex items-center justify-center">
+                    {profile?.avatar_url ? (
+                      <img src={profile.avatar_url} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-cyan-200 text-lg font-bold">
+                        {(displayName || 'U').slice(0, 1)}
+                      </span>
+                    )}
+                  </div>
+                  <span className="absolute -bottom-0.5 -right-0.5 bg-cyan-500 text-white text-[10px] font-medium rounded-full w-5 h-5 flex items-center justify-center">
+                    {myStories[0]?.stories?.length ?? 0}
+                  </span>
+                </div>
+                <div>
+                  <p className="text-white font-medium">Ver mis historias</p>
+                  <p className="text-cyan-300/70 text-xs">
+                    {myStories[0]?.stories?.length ?? 0} publicación{(myStories[0]?.stories?.length ?? 0) !== 1 ? 'es' : ''} en las últimas 24 h
+                  </p>
+                </div>
+              </motion.button>
+            )}
           </div>
         </div>
       )}
@@ -504,6 +574,18 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
         </DialogContent>
       </Dialog>
 
+      {/* Visor de mis historias */}
+      <AnimatePresence>
+        {storyViewerOpen && myStories.length > 0 && (
+          <StoryViewer
+            storiesByUser={myStories}
+            initialUserIndex={0}
+            onClose={() => { setStoryViewerOpen(false); loadMyStories(); }}
+            onNavigate={onNavigate}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Modal Editar datos */}
       <Dialog open={editing} onOpenChange={setEditing}>
         <DialogContent className="bg-[#0c1f3a] border-cyan-400/20 text-white max-w-[calc(100%-2rem)]">
@@ -531,13 +613,20 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
               />
             </div>
             <div className="grid gap-2">
-              <Label className="text-cyan-100">Zona o ciudad</Label>
+              <Label className="text-cyan-100">Ciudad</Label>
               <Input
                 className="bg-white/10 border-cyan-400/30 text-white placeholder:text-white/50"
                 value={editLocation}
                 onChange={(e) => setEditLocation(e.target.value)}
-                placeholder="Ej. Costa Brava, Barcelona"
+                placeholder="Ej. Málaga"
+                list="profile-location-list"
               />
+              <datalist id="profile-location-list">
+                {locationSuggestions.map((loc) => (
+                  <option key={loc} value={loc} />
+                ))}
+              </datalist>
+              <p className="text-cyan-300/60 text-xs">Coincidencias con las ciudades existentes; solo hay una opción por ciudad (con o sin tilde).</p>
             </div>
             <div className="grid gap-2">
               <Label className="text-cyan-100">Nivel de experiencia</Label>

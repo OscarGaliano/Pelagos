@@ -3,6 +3,7 @@ import { AppHeader, type Screen } from '@/app/components/AppHeader';
 import { CommunityScreen } from '@/app/components/CommunityScreen';
 import { DiveLogScreen } from '@/app/components/DiveLogScreen';
 import { GalleryScreen } from '@/app/components/GalleryScreen';
+import { HomeBackgroundCarousel } from '@/app/components/HomeBackgroundCarousel';
 import { HomeScreen } from '@/app/components/HomeScreen';
 import { MapScreen } from '@/app/components/MapScreen';
 import { MarketplaceScreen } from '@/app/components/MarketplaceScreen';
@@ -16,7 +17,7 @@ import { WebcamScreen } from '@/app/components/WebcamScreen';
 import { clearAuthMode, exchangeCodeForSession, getAuthMode } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import type { Session } from '@supabase/supabase-js';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const SCREEN_STORAGE_KEY = 'pelagos_current_screen';
 const AUTH_ERROR_KEY = 'pelagos_auth_error';
@@ -46,12 +47,21 @@ export function getAuthError(): string | null {
   return error;
 }
 
+const CONNECTION_ERROR_MSG = 'No se pudo conectar al servidor. Comprueba tu conexión a internet e inténtalo de nuevo.';
+
+/** Tiempo sin uso (ms) tras el cual se cierra sesión. 30 minutos. */
+const INACTIVITY_LOGOUT_MS = 30 * 60 * 1000;
+const INACTIVITY_CHECK_MS = 60 * 1000; // comprobar cada minuto
+
 function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [currentScreen, setCurrentScreen] = useState<Screen>('register');
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [checkingProfile, setCheckingProfile] = useState(true);
-  
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const lastActivityRef = useRef<number>(Date.now());
+  const inactivityIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const bgBase = 'bg-[#0a1628]';
   const bgGradient = 'bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-cyan-900/20 via-transparent to-transparent';
 
@@ -82,88 +92,11 @@ function App() {
 
   useEffect(() => {
     let mounted = true;
+    let initialSessionHandled = false;
 
-    // Timeout de seguridad: si después de 5 segundos sigue cargando, forzar fin
-    const timeout = setTimeout(() => {
-      if (mounted && checkingProfile) {
-        console.warn('Timeout de carga alcanzado');
-        setCheckingProfile(false);
-      }
-    }, 5000);
-
-    const init = async () => {
-      try {
-        // Primero verificar si hay sesión existente en localStorage
-        const { data: { session: existingSession } } = await supabase.auth.getSession();
-        
-        if (existingSession) {
-          // Ya hay sesión, usarla directamente
-          if (!mounted) return;
-          setSession(existingSession);
-          
-          const hasName = await checkProfileHasName(existingSession.user.id);
-          if (!mounted) return;
-          setNeedsOnboarding(!hasName);
-          if (hasName) {
-            const stored = getStoredScreen();
-            setCurrentScreen(stored ?? 'home');
-          }
-        } else {
-          // No hay sesión, verificar si hay código OAuth en la URL
-          const params = new URLSearchParams(window.location.search);
-          const hashParams = new URLSearchParams(window.location.hash.slice(1));
-          const code = params.get('code') || hashParams.get('code');
-
-          if (code) {
-            try {
-              const authMode = getAuthMode();
-              clearAuthMode();
-              
-              await exchangeCodeForSession();
-              window.history.replaceState({}, '', '/');
-              
-              const { data: { session: newSession } } = await supabase.auth.getSession();
-              if (newSession && mounted) {
-                const hasName = await checkProfileHasName(newSession.user.id);
-                
-                if (authMode === 'login' && !hasName) {
-                  // Usuario intentó iniciar sesión pero no tiene cuenta creada
-                  await supabase.auth.signOut();
-                  setAuthError('Esta cuenta no está registrada. Por favor, crea una cuenta primero.');
-                  if (mounted) {
-                    setSession(null);
-                    setCurrentScreen('register');
-                  }
-                } else {
-                  setSession(newSession);
-                  if (!mounted) return;
-                  setNeedsOnboarding(!hasName);
-                  if (hasName) {
-                    setCurrentScreen(getStoredScreen() ?? 'home');
-                  }
-                }
-              }
-            } catch {
-              window.history.replaceState({}, '', '/');
-              clearAuthMode();
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Error inicializando sesión:', err);
-      }
-      
-      if (mounted) {
-        setCheckingProfile(false);
-      }
-    };
-
-    init();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, s) => {
-      if (!mounted) return;
-      setSession(s);
+    const applySession = async (s: Session | null) => {
       if (!s) {
+        setSession(null);
         setCurrentScreen('register');
         setNeedsOnboarding(false);
         try {
@@ -171,19 +104,161 @@ function App() {
         } catch {
           /* ignore */
         }
-      } else {
-        const hasName = await checkProfileHasName(s.user.id);
+        return;
+      }
+      const hasName = await checkProfileHasName(s.user.id);
+      if (!mounted) return;
+      setSession(s);
+      setNeedsOnboarding(!hasName);
+      if (hasName) {
+        setCurrentScreen(getStoredScreen() ?? 'home');
+      }
+    };
+
+    const finishInitialCheck = () => {
+      if (!mounted || initialSessionHandled) return;
+      initialSessionHandled = true;
+      setCheckingProfile(false);
+    };
+
+    // En local getSession() a veces no responde (CORS/origen). Forzamos salir de carga tras 800 ms
+    // sin depender de ninguna promesa, para que siempre se muestre login o home.
+    const forceExitLoading = setTimeout(() => {
+      if (!mounted || initialSessionHandled) return;
+      initialSessionHandled = true;
+      setCheckingProfile(false);
+    }, 800);
+
+    // En paralelo intentamos getSession (siempre aplicar resultado para restaurar sesión al refrescar)
+    const tryGetSession = setTimeout(() => {
+      if (!mounted) return;
+      supabase.auth.getSession().then(({ data: { session: fallbackSession } }) => {
         if (!mounted) return;
-        setNeedsOnboarding(!hasName);
-        if (hasName) {
-          setCurrentScreen(getStoredScreen() ?? 'home');
+        setConnectionError(null);
+        // Siempre aplicar sesión cuando getSession responde (persistencia al refrescar)
+        applySession(fallbackSession ?? null).finally(() => {
+          if (mounted) {
+            if (!initialSessionHandled) {
+              initialSessionHandled = true;
+            }
+            setCheckingProfile(false);
+          }
+        });
+      }).catch(() => {
+        if (mounted && !initialSessionHandled) {
+          initialSessionHandled = true;
+          setConnectionError(CONNECTION_ERROR_MSG);
+          setCheckingProfile(false);
         }
+      });
+    }, 200);
+
+    // 1) Suscribirse a cambios de auth (INITIAL_SESSION = sesión restaurada de localStorage)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, s) => {
+      if (!mounted) return;
+      if (event === 'INITIAL_SESSION') {
+        try {
+          await applySession(s ?? null);
+          if (mounted) setConnectionError(null);
+        } catch (err) {
+          if (mounted) {
+            setSession(null);
+            setConnectionError(CONNECTION_ERROR_MSG);
+          }
+        } finally {
+          finishInitialCheck();
+        }
+        return;
+      }
+      if (event === 'SIGNED_OUT') {
+        setSession(null);
+        setCurrentScreen('register');
+        setNeedsOnboarding(false);
+        try {
+          sessionStorage.removeItem(SCREEN_STORAGE_KEY);
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        setSession(s ?? null);
+        if (s) {
+          const hasName = await checkProfileHasName(s.user.id);
+          if (!mounted) return;
+          setNeedsOnboarding(!hasName);
+          if (hasName) {
+            setCurrentScreen(getStoredScreen() ?? 'home');
+          }
+        }
+        if (!initialSessionHandled) finishInitialCheck();
       }
     });
 
+    // 2) Si hay código OAuth en la URL, intercambiarlo (el listener recibirá SIGNED_IN después)
+    const init = async () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const hashParams = new URLSearchParams(window.location.hash.slice(1));
+        const code = params.get('code') || hashParams.get('code');
+
+        if (code) {
+          const authMode = getAuthMode();
+          clearAuthMode();
+          await exchangeCodeForSession();
+          window.history.replaceState({}, '', '/');
+          const { data: { session: newSession } } = await supabase.auth.getSession();
+          if (newSession && mounted) {
+            const hasName = await checkProfileHasName(newSession.user.id);
+            if (authMode === 'login' && !hasName) {
+              await supabase.auth.signOut();
+              setAuthError('Esta cuenta no está registrada. Por favor, crea una cuenta primero.');
+              if (mounted) {
+                setSession(null);
+                setCurrentScreen('register');
+              }
+            } else {
+              await applySession(newSession);
+            }
+          }
+          if (mounted && !initialSessionHandled) finishInitialCheck();
+        }
+      } catch (err) {
+        console.error('Error inicializando sesión:', err);
+        if (mounted && !initialSessionHandled) finishInitialCheck();
+      }
+    };
+    init();
+
+    // 3) Al volver a la pestaña, re-sincronizar sesión con Supabase (evita tener que refrescar si se inició sesión en otra pestaña o el estado se desincronizó)
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible' || !mounted) return;
+      setConnectionError(null);
+      supabase.auth.getSession().then(({ data: { session: s } }) => {
+        if (!mounted) return;
+        if (s) {
+          applySession(s);
+        } else {
+          setSession(null);
+          setCurrentScreen('register');
+          setNeedsOnboarding(false);
+          try {
+            sessionStorage.removeItem(SCREEN_STORAGE_KEY);
+          } catch {
+            /* ignore */
+          }
+        }
+      }).catch(() => {
+        if (mounted) setConnectionError(CONNECTION_ERROR_MSG);
+      });
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
     return () => {
       mounted = false;
-      clearTimeout(timeout);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      clearTimeout(forceExitLoading);
+      clearTimeout(tryGetSession);
       subscription.unsubscribe();
     };
   }, []);
@@ -197,6 +272,65 @@ function App() {
       /* ignore */
     }
   };
+
+  const retryConnection = () => {
+    setConnectionError(null);
+    setCheckingProfile(true);
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      if (s) {
+        checkProfileHasName(s.user.id).then((hasName) => {
+          setSession(s);
+          setNeedsOnboarding(!hasName);
+          setCurrentScreen(hasName ? (getStoredScreen() ?? 'home') : 'register');
+          setCheckingProfile(false);
+        });
+      } else {
+        setSession(null);
+        setCheckingProfile(false);
+      }
+    }).catch(() => {
+      setConnectionError(CONNECTION_ERROR_MSG);
+      setCheckingProfile(false);
+    });
+  };
+
+  // Cierre de sesión por inactividad (solo cuando hay sesión)
+  useEffect(() => {
+    if (!session) {
+      if (inactivityIntervalRef.current) {
+        clearInterval(inactivityIntervalRef.current);
+        inactivityIntervalRef.current = null;
+      }
+      return;
+    }
+    lastActivityRef.current = Date.now();
+    const onActivity = () => { lastActivityRef.current = Date.now(); };
+    window.addEventListener('click', onActivity);
+    window.addEventListener('keydown', onActivity);
+    window.addEventListener('mousemove', onActivity);
+    window.addEventListener('scroll', onActivity);
+    window.addEventListener('touchstart', onActivity);
+    inactivityIntervalRef.current = setInterval(() => {
+      if (Date.now() - lastActivityRef.current >= INACTIVITY_LOGOUT_MS) {
+        if (inactivityIntervalRef.current) {
+          clearInterval(inactivityIntervalRef.current);
+          inactivityIntervalRef.current = null;
+        }
+        supabase.auth.signOut();
+      }
+    }, INACTIVITY_CHECK_MS);
+    return () => {
+      window.removeEventListener('click', onActivity);
+      window.removeEventListener('keydown', onActivity);
+      window.removeEventListener('mousemove', onActivity);
+      window.removeEventListener('scroll', onActivity);
+      window.removeEventListener('touchstart', onActivity);
+      if (inactivityIntervalRef.current) {
+        clearInterval(inactivityIntervalRef.current);
+        inactivityIntervalRef.current = null;
+      }
+    };
+  }, [session]);
 
   // Cargando verificación de perfil
   if (checkingProfile) {
@@ -221,7 +355,11 @@ function App() {
         <div className={`fixed inset-0 ${bgBase}`} />
         <div className={`fixed inset-0 ${bgGradient}`} />
         <div className="relative z-10 min-h-screen">
-          <RegisterScreen onNavigate={setCurrentScreen} />
+          <RegisterScreen
+            onNavigate={setCurrentScreen}
+            connectionError={connectionError}
+            onRetryConnection={retryConnection}
+          />
         </div>
       </div>
     );
@@ -243,19 +381,29 @@ function App() {
     );
   }
 
-  // Con sesión: menú principal y resto de pantallas
+  // Con sesión: menú principal y resto de pantallas (responsive + safe-area móvil)
   return (
-    <div className="max-w-md mx-auto relative overflow-hidden min-h-screen">
+    <div className="w-full max-w-md mx-auto relative overflow-x-hidden min-h-screen min-h-[100dvh]">
       <div className={`fixed inset-0 ${bgBase}`} />
-      <div className={`fixed inset-0 ${bgGradient}`} />
+      {/* En home el carrusel de imágenes es el fondo; en el resto de pantallas el gradiente */}
+      {currentScreen !== 'home' && <div className={`fixed inset-0 ${bgGradient}`} />}
+      {currentScreen === 'home' && <HomeBackgroundCarousel />}
 
       <AppHeader
         currentScreen={currentScreen}
         onNavigate={setScreenAndPersist}
         onLogout={handleLogout}
+        onSharePost={() => {
+          try {
+            sessionStorage.setItem('pelagos_open_share_dive', '1');
+          } catch {
+            /* ignore */
+          }
+          setScreenAndPersist('community');
+        }}
       />
 
-      <div className="relative z-10 pt-[72px]">
+      <div className="relative z-10 pt-[calc(72px+env(safe-area-inset-top,0px))] pb-[env(safe-area-inset-bottom)] min-h-[calc(100dvh-72px)]">
         {currentScreen === 'home' && <HomeScreen onNavigate={setScreenAndPersist} />}
         {currentScreen === 'log' && <DiveLogScreen onNavigate={setScreenAndPersist} />}
         {currentScreen === 'gallery' && <GalleryScreen onNavigate={setScreenAndPersist} />}

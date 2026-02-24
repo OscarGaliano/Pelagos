@@ -1,31 +1,32 @@
+import { getProfilesForPescasub } from '@/lib/api/profiles';
 import {
-    addComment,
-    createSharedDive,
-    deleteComment,
-    deleteSharedDive,
-    getComments,
-    getMySharedDives,
-    toggleLike,
-    uploadSharedDivePhoto,
-    uploadSharedDiveVideo,
-    type CreateSharedDivePayload,
-    type SharedDive,
-    type SharedDiveComment,
+  addComment,
+  createSharedDive,
+  deleteComment,
+  deleteSharedDive,
+  getComments,
+  getMySharedDives,
+  toggleLike,
+  uploadSharedDivePhoto,
+  uploadSharedDiveVideo,
+  type CreateSharedDivePayload,
+  type SharedDive,
+  type SharedDiveComment,
 } from '@/lib/api/sharedDives';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-    ChevronLeft,
-    Heart,
-    ImagePlus,
-    Loader2,
-    MessageCircle,
-    MoreVertical,
-    Plus,
-    Send,
-    Share2,
-    Trash2,
-    Video,
-    X
+  ChevronLeft,
+  Heart,
+  ImagePlus,
+  Loader2,
+  MessageCircle,
+  MoreVertical,
+  Plus,
+  Send,
+  Share2,
+  Trash2,
+  Video,
+  X
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -61,14 +62,23 @@ function formatApneaTime(seconds: number): string {
 export default function SharedDivesView({
   userId,
   onBack,
+  initialOpenCreate = false,
+  onCreateFormClosed,
 }: {
   userId: string | null;
   onBack: () => void;
+  /** Abrir directamente el modal de crear publicación (ej. desde el + del home). */
+  initialOpenCreate?: boolean;
+  onCreateFormClosed?: () => void;
 }) {
   const [dives, setDives] = useState<SharedDive[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(initialOpenCreate);
   const [selectedDive, setSelectedDive] = useState<SharedDive | null>(null);
+
+  useEffect(() => {
+    if (initialOpenCreate) setShowCreateForm(true);
+  }, [initialOpenCreate]);
 
   const loadDives = useCallback(async () => {
     if (!userId) {
@@ -175,10 +185,14 @@ export default function SharedDivesView({
         {showCreateForm && userId && (
           <CreateDiveModal
             userId={userId}
-            onClose={() => setShowCreateForm(false)}
+            onClose={() => {
+              setShowCreateForm(false);
+              onCreateFormClosed?.();
+            }}
             onCreated={(newDive) => {
               setDives((prev) => [newDive, ...prev]);
               setShowCreateForm(false);
+              onCreateFormClosed?.();
             }}
           />
         )}
@@ -295,10 +309,13 @@ function DiveCard({
             </span>
           )}
         </div>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <p className="text-white font-medium text-sm">
             {dive.user_profile?.display_name || 'Usuario'}
           </p>
+          {dive.tagged_profiles?.length ? (
+            <p className="text-cyan-400/80 text-xs truncate">con {dive.tagged_profiles.map((t) => t.display_name || '').filter(Boolean).join(', ')}</p>
+          ) : null}
           <p className="text-cyan-400/70 text-xs">{formatTimeAgo(dive.created_at)}</p>
         </div>
         {isOwner && (
@@ -495,6 +512,28 @@ function CreateDiveModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState('');
+  const [taggedUserIds, setTaggedUserIds] = useState<string[]>([]);
+  const [profileList, setProfileList] = useState<Array<{ id: string; display_name: string | null }>>([]);
+  const [tagSearch, setTagSearch] = useState('');
+
+  useEffect(() => {
+    getProfilesForPescasub()
+      .then((list) => setProfileList(list))
+      .catch(() => setProfileList([]));
+  }, []);
+
+  const filteredProfiles = profileList.filter((p) => {
+    if (p.id === userId) return false;
+    const name = (p.display_name || '').toLowerCase();
+    const q = tagSearch.trim().toLowerCase();
+    return !q || name.includes(q);
+  });
+
+  const toggleTagged = (id: string) => {
+    setTaggedUserIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
 
   const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -558,6 +597,7 @@ function CreateDiveModal({
         depth_max: depthMax ? parseFloat(depthMax) : null,
         apnea_time_seconds: apneaTotal > 0 ? apneaTotal : null,
         current_type: currentType || null,
+        tagged_user_ids: taggedUserIds.length > 0 ? taggedUserIds : null,
       };
 
       setUploadProgress('Creando publicación...');
@@ -610,6 +650,40 @@ function CreateDiveModal({
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          {/* Etiquetar a: buscador con coincidencias */}
+          <div>
+            <label className="block text-cyan-200 text-sm font-medium mb-2">
+              Etiquetar a (opcional)
+            </label>
+            <p className="text-cyan-400/60 text-xs mb-2">Estos usuarios aparecerán en la publicación</p>
+            <input
+              type="search"
+              value={tagSearch}
+              onChange={(e) => setTagSearch(e.target.value)}
+              placeholder="Buscar por nombre..."
+              className="w-full rounded-xl bg-white/10 border border-cyan-400/30 px-4 py-2.5 text-white placeholder-cyan-400/50 focus:outline-none focus:ring-2 focus:ring-cyan-400/50 text-sm mb-2"
+            />
+            <div className="max-h-36 overflow-y-auto rounded-xl bg-white/5 border border-cyan-400/20 p-2 space-y-1">
+              {filteredProfiles.length === 0 ? (
+                <p className="text-cyan-400/60 text-sm py-2 text-center">
+                  {tagSearch.trim() ? 'Sin coincidencias' : 'Escribe para buscar usuarios'}
+                </p>
+              ) : (
+                filteredProfiles.slice(0, 50).map((p) => (
+                  <label key={p.id} className="flex items-center gap-2 py-1.5 px-2 rounded-lg hover:bg-white/5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={taggedUserIds.includes(p.id)}
+                      onChange={() => toggleTagged(p.id)}
+                      className="rounded border-cyan-400/40"
+                    />
+                    <span className="text-white text-sm truncate">{p.display_name || 'Usuario'}</span>
+                  </label>
+                ))
+              )}
+            </div>
+          </div>
+
           {/* Descripción */}
           <div>
             <label className="block text-cyan-200 text-sm font-medium mb-2">

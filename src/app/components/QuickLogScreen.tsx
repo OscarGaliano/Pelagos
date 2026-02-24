@@ -15,20 +15,31 @@ import {
     type TideEvent,
     type Zona,
 } from '@/lib/api/conditions';
-import { addCatch, createDive } from '@/lib/api/dives';
+import { addCatch, createDive, uploadCatchImage } from '@/lib/api/dives';
 import { getDiveSpots } from '@/lib/api/diveSpots';
 import { formatPeriodRange, getMoonPhase, getMoonPhaseLabel, getSolunarPeriods, type SolunarPeriod } from '@/lib/solunar';
 import { supabase } from '@/lib/supabase';
 import type { DiveSpot } from '@/lib/types';
-import { Calendar, ChevronDown, ChevronLeft, Clock, Fish, MapPin, Pencil, Plus, RotateCcw, Save, Search, Star, Trash2, Waves, Wind, X } from 'lucide-react';
+import { Calendar, Camera, ChevronDown, ChevronLeft, Clock, Fish, ImageIcon, MapPin, Pencil, Plus, RotateCcw, Save, Search, Star, Trash2, Waves, Wind, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const ESPECIES_FIJAS = ['Dorada', 'Lubina', 'Sargo', 'Mero', 'Dentón', 'Limón'] as const;
 
-interface OtraEspecie {
-  especie: string;
-  cantidad: number;
+/** Una captura individual: foto (cámara o galería), peso y longitud. */
+interface CaptureItem {
+  id: string;
+  imageFile?: File | null;
+  imagePreview?: string;
+  weight?: string;
+  length?: string;
+}
+
+/** Cuadro: especie (izq), cantidad (der); cada captura tiene sus datos y foto. */
+interface CaptureRow {
+  id: string;
+  species: string;
+  items: CaptureItem[];
 }
 
 function parseTimeToMinutes(hhmm: string): number {
@@ -105,12 +116,11 @@ export function QuickLogScreen({ onNavigate }: QuickLogScreenProps) {
   const [windDir, setWindDir] = useState<number | null>(null);
   const [waveHeight, setWaveHeight] = useState<number | null>(null);
   const [loadingConditions, setLoadingConditions] = useState(false);
-  const [cantidades, setCantidades] = useState<Record<string, number>>(
-    Object.fromEntries(ESPECIES_FIJAS.map((s) => [s, 0]))
-  );
-  const [otras, setOtras] = useState<OtraEspecie[]>([]);
+  const [captures, setCaptures] = useState<CaptureRow[]>([]);
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  const captureCameraRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const captureGalleryRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const fromM = parseTimeToMinutes(timeFrom);
   const toM = parseTimeToMinutes(timeTo);
@@ -216,18 +226,48 @@ export function QuickLogScreen({ onNavigate }: QuickLogScreenProps) {
     }
   }, [date, currentZona?.id, currentZona?.lat, currentZona?.lon]);
 
-  const addOtra = () => setOtras((prev) => [...prev, { especie: '', cantidad: 1 }]);
-  const updateOtra = (i: number, field: 'especie' | 'cantidad', value: string | number) => {
-    setOtras((prev) => {
-      const next = [...prev];
-      next[i] = { ...next[i], [field]: value };
-      return next;
+  const addCapture = (species?: string) => {
+    const rowId = crypto.randomUUID();
+    const itemId = crypto.randomUUID();
+    setCaptures((prev) => [
+      ...prev,
+      { id: rowId, species: species ?? '', items: [{ id: itemId, imageFile: null, imagePreview: undefined, weight: '', length: '' }] },
+    ]);
+  };
+  const updateCapture = (rowId: string, updates: Partial<Pick<CaptureRow, 'species'>>) => {
+    setCaptures((prev) => prev.map((c) => (c.id === rowId ? { ...c, ...updates } : c)));
+  };
+  const addItemToRow = (rowId: string) => {
+    setCaptures((prev) => prev.map((c) => (c.id === rowId ? { ...c, items: [...c.items, { id: crypto.randomUUID(), imageFile: null, imagePreview: undefined, weight: '', length: '' }] } : c)));
+  };
+  const removeItemFromRow = (rowId: string, itemId: string) => {
+    setCaptures((prev) => prev.map((c) => {
+      if (c.id !== rowId) return c;
+      const next = c.items.filter((i) => i.id !== itemId);
+      return next.length === 0 ? null : { ...c, items: next };
+    }).filter((c): c is CaptureRow => c != null));
+    captureCameraRefs.current[`${rowId}-${itemId}`] = null;
+    captureGalleryRefs.current[`${rowId}-${itemId}`] = null;
+  };
+  const updateCaptureItem = (rowId: string, itemId: string, updates: Partial<Pick<CaptureItem, 'imageFile' | 'imagePreview' | 'weight' | 'length'>>) => {
+    setCaptures((prev) => prev.map((c) => (c.id === rowId ? { ...c, items: c.items.map((i) => (i.id === itemId ? { ...i, ...updates } : i)) } : c)));
+  };
+  const removeCapture = (rowId: string) => {
+    setCaptures((prev) => {
+      const row = prev.find((c) => c.id === rowId);
+      row?.items.forEach((i) => {
+        captureCameraRefs.current[`${rowId}-${i.id}`] = null;
+        captureGalleryRefs.current[`${rowId}-${i.id}`] = null;
+      });
+      return prev.filter((c) => c.id !== rowId);
     });
   };
-  const removeOtra = (i: number) => setOtras((prev) => prev.filter((_, idx) => idx !== i));
-
-  const setCantidad = (species: string, value: number) => {
-    setCantidades((prev) => ({ ...prev, [species]: Math.max(0, value) }));
+  const onCaptureFileChange = (rowId: string, itemId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !file.type.startsWith('image/')) return;
+    const preview = URL.createObjectURL(file);
+    updateCaptureItem(rowId, itemId, { imageFile: file, imagePreview: preview });
   };
 
   const handleSave = async () => {
@@ -251,14 +291,23 @@ export function QuickLogScreen({ onNavigate }: QuickLogScreenProps) {
         notes: notes.trim() || undefined,
       });
       const diveId = (dive as { id: string }).id;
-      for (const sp of ESPECIES_FIJAS) {
-        const q = cantidades[sp] ?? 0;
-        for (let i = 0; i < q; i++) await addCatch({ dive_id: diveId, species: sp });
-      }
-      for (const o of otras) {
-        if (!o.especie.trim()) continue;
-        for (let i = 0; i < Math.max(0, o.cantidad); i++) {
-          await addCatch({ dive_id: diveId, species: o.especie.trim() });
+      for (const row of captures) {
+        if (!row.species.trim()) continue;
+        for (const item of row.items) {
+          const weightKg = item.weight?.replace(',', '.');
+          const lengthVal = item.length?.replace(',', '.');
+          const w = weightKg != null && weightKg !== '' ? parseFloat(weightKg) : undefined;
+          const l = lengthVal != null && lengthVal !== '' ? parseFloat(lengthVal) : undefined;
+          const created = await addCatch({
+            dive_id: diveId,
+            species: row.species.trim(),
+            weight_kg: w != null && Number.isFinite(w) ? w : undefined,
+            length_cm: l != null && Number.isFinite(l) ? l : undefined,
+          });
+          const createdId = (created as { id: string }).id;
+          if (item.imageFile) {
+            await uploadCatchImage(user.id, createdId, item.imageFile);
+          }
         }
       }
       onNavigate('log');
@@ -582,77 +631,166 @@ export function QuickLogScreen({ onNavigate }: QuickLogScreenProps) {
           )}
         </div>
 
-        {/* Especies capturadas */}
+        {/* Capturas: cuadro — especie (izq), cantidad (der); por cada captura: foto (cámara/galería), peso, longitud */}
         <div>
           <label className="text-cyan-300 text-sm mb-3 block flex items-center gap-2">
             <Fish className="w-4 h-4" />
-            Especies capturadas (cantidad por especie)
+            Capturas
           </label>
-          <div className="space-y-2">
-            {ESPECIES_FIJAS.map((species) => (
-              <div
-                key={species}
-                className="flex items-center justify-between gap-3 backdrop-blur-xl bg-white/5 rounded-xl py-2 px-4 border border-cyan-400/20"
+          <p className="text-cyan-300/70 text-xs mb-3">Especie a la izquierda, cantidad a la derecha. En cada captura puedes añadir foto (cámara o galería), peso (kg) y longitud (cm).</p>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {ESPECIES_FIJAS.map((sp) => (
+              <motion.button
+                key={sp}
+                type="button"
+                whileTap={{ scale: 0.97 }}
+                onClick={() => addCapture(sp)}
+                className="px-3 py-1.5 rounded-xl bg-cyan-500/20 text-cyan-200 text-sm border border-cyan-400/30 hover:bg-cyan-500/30"
               >
-                <span className="text-white">{species}</span>
-                <div className="flex items-center gap-2">
+                + {sp}
+              </motion.button>
+            ))}
+          </div>
+          <div className="space-y-4">
+            {captures.map((row) => (
+              <div
+                key={row.id}
+                className="backdrop-blur-xl bg-white/5 rounded-xl border border-cyan-400/20 overflow-hidden"
+              >
+                {/* Fila: especie (izq) + cantidad (der) */}
+                <div className="flex items-center gap-3 p-3 border-b border-cyan-400/10">
+                  <input
+                    type="text"
+                    placeholder="Especie"
+                    value={row.species}
+                    onChange={(e) => updateCapture(row.id, { species: e.target.value })}
+                    list={`species-list-${row.id}`}
+                    className="flex-1 min-w-0 backdrop-blur-xl bg-white/10 rounded-lg py-2.5 px-3 border border-cyan-400/20 text-white placeholder-cyan-300/40 text-sm"
+                  />
+                  <datalist id={`species-list-${row.id}`}>
+                    {ESPECIES_FIJAS.map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <span className="text-cyan-300/80 text-xs mr-0.5">Cant.</span>
+                    <button
+                      type="button"
+                      onClick={() => row.items.length > 1 && removeItemFromRow(row.id, row.items[row.items.length - 1].id)}
+                      className="w-8 h-8 rounded-lg bg-white/10 border border-cyan-400/20 text-cyan-200 font-medium hover:bg-white/15 disabled:opacity-40"
+                      aria-label="Menos"
+                      disabled={row.items.length <= 1}
+                    >
+                      −
+                    </button>
+                    <span className="w-8 text-center text-white font-medium text-sm tabular-nums">{row.items.length}</span>
+                    <button
+                      type="button"
+                      onClick={() => addItemToRow(row.id)}
+                      className="w-8 h-8 rounded-lg bg-white/10 border border-cyan-400/20 text-cyan-200 font-medium hover:bg-white/15 disabled:opacity-40"
+                      aria-label="Más"
+                      disabled={row.items.length >= 99}
+                    >
+                      +
+                    </button>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setCantidad(species, (cantidades[species] ?? 0) - 1)}
-                    className="w-8 h-8 rounded-lg bg-cyan-500/20 text-cyan-300 font-bold"
+                    onClick={() => removeCapture(row.id)}
+                    className="p-2 text-red-300 hover:bg-red-500/20 rounded-lg shrink-0"
+                    aria-label="Quitar especie"
                   >
-                    −
+                    <Trash2 className="w-4 h-4" />
                   </button>
-                  <span className="text-white font-medium w-8 text-center tabular-nums">
-                    {cantidades[species] ?? 0}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setCantidad(species, (cantidades[species] ?? 0) + 1)}
-                    className="w-8 h-8 rounded-lg bg-cyan-500/20 text-cyan-300 font-bold"
-                  >
-                    +
-                  </button>
+                </div>
+                {/* Por cada captura: foto (Cámara | Galería), peso, longitud */}
+                <div className="p-3 space-y-2">
+                  {row.items.map((item, idx) => (
+                    <div key={item.id} className="flex flex-wrap items-center gap-2 py-2 px-2 rounded-lg bg-white/5 border border-cyan-400/10">
+                      <span className="text-cyan-300/60 text-xs w-6 shrink-0">{idx + 1}.</span>
+                      <input
+                        ref={(el) => { captureCameraRefs.current[`${row.id}-${item.id}`] = el; }}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        onChange={(e) => onCaptureFileChange(row.id, item.id, e)}
+                      />
+                      <input
+                        ref={(el) => { captureGalleryRefs.current[`${row.id}-${item.id}`] = el; }}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => onCaptureFileChange(row.id, item.id, e)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => captureCameraRefs.current[`${row.id}-${item.id}`]?.click()}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/10 text-cyan-300 text-xs border border-cyan-400/20 hover:bg-white/15"
+                        title="Foto desde cámara"
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                        Cámara
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => captureGalleryRefs.current[`${row.id}-${item.id}`]?.click()}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/10 text-cyan-300 text-xs border border-cyan-400/20 hover:bg-white/15"
+                        title="Foto desde galería"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        Galería
+                      </button>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="Peso kg"
+                        value={item.weight ?? ''}
+                        onChange={(e) => updateCaptureItem(row.id, item.id, { weight: e.target.value })}
+                        className="w-20 backdrop-blur-xl bg-white/10 rounded-lg py-1.5 px-2 border border-cyan-400/20 text-white placeholder-cyan-300/40 text-xs text-center"
+                      />
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="cm"
+                        value={item.length ?? ''}
+                        onChange={(e) => updateCaptureItem(row.id, item.id, { length: e.target.value })}
+                        className="w-14 backdrop-blur-xl bg-white/10 rounded-lg py-1.5 px-2 border border-cyan-400/20 text-white placeholder-cyan-300/40 text-xs text-center"
+                      />
+                      {item.imagePreview ? (
+                        <div className="relative inline-block shrink-0">
+                          <img src={item.imagePreview} alt="" className="h-10 w-10 object-cover rounded-lg border border-cyan-400/20" />
+                          <button
+                            type="button"
+                            onClick={() => updateCaptureItem(row.id, item.id, { imageFile: null, imagePreview: undefined })}
+                            className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-black/70 text-white flex items-center justify-center"
+                            aria-label="Quitar foto"
+                          >
+                            <X className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
+                      ) : null}
+                      {row.items.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeItemFromRow(row.id, item.id)}
+                          className="p-1.5 text-red-300/80 hover:bg-red-500/20 rounded-lg shrink-0"
+                          aria-label="Quitar esta captura"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
             ))}
           </div>
-
-          <p className="text-cyan-300/70 text-xs mt-3 mb-2">Otras (especie + cantidad)</p>
-          {otras.map((o, i) => (
-            <div
-              key={i}
-              className="flex items-center gap-2 mb-2"
-            >
-              <input
-                type="text"
-                placeholder="Especie"
-                value={o.especie}
-                onChange={(e) => updateOtra(i, 'especie', e.target.value)}
-                className="flex-1 backdrop-blur-xl bg-white/10 rounded-xl py-2.5 px-3 border border-cyan-400/20 text-white placeholder-cyan-300/40 text-sm"
-              />
-              <input
-                type="number"
-                step="any"
-                value={o.cantidad}
-                onChange={(e) => updateOtra(i, 'cantidad', parseFloat(e.target.value) || 0)}
-                className="w-20 backdrop-blur-xl bg-white/10 rounded-xl py-2.5 px-2 border border-cyan-400/20 text-white text-center text-sm"
-              />
-              <button
-                type="button"
-                onClick={() => removeOtra(i)}
-                className="p-2 text-red-300 hover:bg-red-500/20 rounded-xl"
-                aria-label="Quitar"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
           <motion.button
             type="button"
-            onClick={addOtra}
+            onClick={() => addCapture()}
             whileTap={{ scale: 0.98 }}
-            className="flex items-center gap-2 text-cyan-300 text-sm py-2"
+            className="flex items-center gap-2 text-cyan-300 text-sm py-2 mt-2"
           >
             <Plus className="w-4 h-4" />
             Añadir otra especie

@@ -1,7 +1,16 @@
+import { StoryViewer } from '@/app/components/StoryViewer';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/app/components/ui/select';
 import { formatFishingModalities, getProfilesForPescasub } from '@/lib/api/profiles';
-import { getUserSharedDives, type SharedDive } from '@/lib/api/sharedDives';
+import { getStoriesFeed, getUserSharedDives, type SharedDive, type StoriesByUser } from '@/lib/api/sharedDives';
+import { extractCityFromLocation, normalizeCity, uniqueCitiesByNormalized } from '@/lib/cityUtils';
 import { supabase } from '@/lib/supabase';
-import { ArrowLeft, Calendar, ChevronLeft, Heart, Loader2, MapPin, MessageCircle, User } from 'lucide-react';
+import { ArrowLeft, Calendar, Heart, Loader2, MapPin, MessageCircle, User } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -14,6 +23,7 @@ const EXPERIENCE_LABELS: Record<string, string> = {
 
 const MESSAGES_TARGET_USER_KEY = 'pelagos_messages_target_user_id';
 const COMMUNITY_OPEN_PESCASUB_KEY = 'community_open_pescasub';
+const VIEW_PROFILE_USER_KEY = 'pelagos_view_profile_user_id';
 
 type ProfileRow = {
   id: string;
@@ -39,8 +49,10 @@ export function PescasubView({ onBack, onNavigate }: PescasubViewProps) {
   const [filterCity, setFilterCity] = useState<string | null>(null);
   const [selectedProfile, setSelectedProfile] = useState<ProfileRow | null>(null);
   const [selectedDives, setSelectedDives] = useState<SharedDive[]>([]);
+  const [selectedProfileStories, setSelectedProfileStories] = useState<StoriesByUser[]>([]);
   const [loadingDives, setLoadingDives] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [storyViewerOpen, setStoryViewerOpen] = useState(false);
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -66,10 +78,15 @@ export function PescasubView({ onBack, onNavigate }: PescasubViewProps) {
     setSelectedProfile(profile);
     setLoadingDives(true);
     try {
-      const dives = await getUserSharedDives(profile.id, currentUserId ?? undefined);
+      const [dives, storiesFeed] = await Promise.all([
+        getUserSharedDives(profile.id, currentUserId ?? undefined),
+        getStoriesFeed(currentUserId ?? undefined, profile.id),
+      ]);
       setSelectedDives(dives);
+      setSelectedProfileStories(storiesFeed);
     } catch {
       setSelectedDives([]);
+      setSelectedProfileStories([]);
     } finally {
       setLoadingDives(false);
     }
@@ -78,16 +95,32 @@ export function PescasubView({ onBack, onNavigate }: PescasubViewProps) {
   const closeProfile = () => {
     setSelectedProfile(null);
     setSelectedDives([]);
+    setSelectedProfileStories([]);
   };
 
+  // Auto-abrir perfil cuando se viene desde "Ver perfil" en StoryViewer
+  useEffect(() => {
+    if (loading || profiles.length === 0) return;
+    try {
+      const targetId = sessionStorage.getItem(VIEW_PROFILE_USER_KEY);
+      if (targetId) {
+        sessionStorage.removeItem(VIEW_PROFILE_USER_KEY);
+        const profile = profiles.find((p) => p.id === targetId);
+        if (profile) openProfile(profile);
+      }
+    } catch { /* ignore */ }
+  }, [loading, profiles, openProfile]);
+
+  // Ciudades únicas por nombre normalizado (Málaga/Malaga → una sola opción)
   const cities = useMemo(() => {
-    const locs = [...new Set(profiles.map((p) => p.location).filter((x): x is string => !!x?.trim()))];
-    return locs.sort((a, b) => a.localeCompare(b));
+    const locs = profiles.map((p) => p.location);
+    return uniqueCitiesByNormalized(locs).sort((a, b) => a.display.localeCompare(b.display));
   }, [profiles]);
 
   const filtered = useMemo(() => {
     if (!filterCity) return profiles;
-    return profiles.filter((p) => (p.location ?? '').trim() === filterCity);
+    const norm = normalizeCity(filterCity);
+    return profiles.filter((p) => normalizeCity(extractCityFromLocation(p.location)) === norm);
   }, [profiles, filterCity]);
 
   const handleSendMessage = (userId: string) => {
@@ -109,7 +142,7 @@ export function PescasubView({ onBack, onNavigate }: PescasubViewProps) {
             whileTap={{ scale: 0.9 }}
             className="p-2 -ml-1 rounded-full hover:bg-white/10 flex items-center gap-1"
           >
-            <ChevronLeft className="w-6 h-6 text-cyan-400" />
+            <ArrowLeft className="w-6 h-6 text-cyan-400" />
             <span className="text-cyan-400 text-sm font-medium">Volver</span>
           </motion.button>
           <h1 className="text-white text-xl font-medium">Pescasub</h1>
@@ -123,47 +156,32 @@ export function PescasubView({ onBack, onNavigate }: PescasubViewProps) {
           </div>
         )}
 
-        {/* Filtro: Volver a todos (cuando hay ciudad seleccionada) + Todos / por ciudad */}
+        {/* Filtro por ciudad: pestaña seleccionable (desplegable) */}
         {!loading && profiles.length > 0 && (
           <div className="mb-4">
-            {filterCity && (
-              <motion.button
-                type="button"
-                onClick={() => setFilterCity(null)}
-                whileTap={{ scale: 0.97 }}
-                className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg text-sm font-medium text-cyan-300 hover:bg-white/10 border border-cyan-400/20"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                Volver a la lista completa
-              </motion.button>
-            )}
-            <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => setFilterCity(null)}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                filterCity === null
-                  ? 'bg-cyan-500/40 text-cyan-100 border border-cyan-400/50'
-                  : 'bg-white/10 text-cyan-200 border border-cyan-400/20 hover:bg-white/15'
-              }`}
+            <label className="block text-cyan-200/90 text-xs font-medium mb-1.5">Ciudad</label>
+            <Select
+              value={filterCity ?? '__todas__'}
+              onValueChange={(v) => setFilterCity(v === '__todas__' ? null : v)}
             >
-              Todos
-            </button>
-            {cities.map((city) => (
-              <button
-                key={city}
-                type="button"
-                onClick={() => setFilterCity(city)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                  filterCity === city
-                    ? 'bg-cyan-500/40 text-cyan-100 border border-cyan-400/50'
-                    : 'bg-white/10 text-cyan-200 border border-cyan-400/20 hover:bg-white/15'
-                }`}
-              >
-                {city}
-              </button>
-            ))}
-            </div>
+              <SelectTrigger className="w-full max-w-[280px] bg-white/10 border-cyan-400/30 text-cyan-100">
+                <SelectValue placeholder="Todas las ciudades" />
+              </SelectTrigger>
+              <SelectContent className="bg-[#0c1f3a] border-cyan-400/20">
+                <SelectItem value="__todas__" className="text-cyan-100 focus:bg-cyan-500/20">
+                  Todas las ciudades
+                </SelectItem>
+                {cities.map((city) => (
+                  <SelectItem
+                    key={city.normalized}
+                    value={city.display}
+                    className="text-cyan-100 focus:bg-cyan-500/20"
+                  >
+                    {city.display}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         )}
 
@@ -208,7 +226,7 @@ export function PescasubView({ onBack, onNavigate }: PescasubViewProps) {
                   </p>
                   <div className="flex items-center justify-center gap-0.5 text-cyan-300/80 text-[10px] mt-0.5 w-full px-0.5 flex-shrink-0 min-h-[1rem]">
                     <MapPin className="w-2.5 h-2.5 flex-shrink-0" />
-                    <span className="truncate text-center">{p.location?.trim() || '—'}</span>
+                    <span className="truncate text-center">{extractCityFromLocation(p.location) || '—'}</span>
                   </div>
                   {p.member_since && (
                     <div className="flex items-center justify-center gap-0.5 text-cyan-300/70 text-[9px] mt-0.5 flex-shrink-0">
@@ -293,10 +311,10 @@ export function PescasubView({ onBack, onNavigate }: PescasubViewProps) {
                   </p>
                   
                   <div className="flex flex-wrap justify-center gap-3 mt-3">
-                    {selectedProfile.location && (
+                    {extractCityFromLocation(selectedProfile.location) && (
                       <span className="flex items-center gap-1 px-3 py-1 rounded-lg bg-cyan-500/20 text-cyan-300 text-xs">
                         <MapPin className="w-3 h-3" />
-                        {selectedProfile.location}
+                        {extractCityFromLocation(selectedProfile.location)}
                       </span>
                     )}
                     {selectedProfile.member_since && (
@@ -311,18 +329,29 @@ export function PescasubView({ onBack, onNavigate }: PescasubViewProps) {
                     {formatFishingModalities(selectedProfile)}
                   </p>
 
-                  {/* Botón enviar mensaje */}
-                  <motion.button
-                    whileTap={{ scale: 0.97 }}
-                    onClick={() => {
-                      closeProfile();
-                      handleSendMessage(selectedProfile.id);
-                    }}
-                    className="mt-4 px-6 py-2.5 rounded-xl bg-cyan-500/40 hover:bg-cyan-500/50 text-cyan-100 text-sm font-medium flex items-center gap-2 border border-cyan-400/30"
-                  >
-                    <MessageCircle className="w-4 h-4" />
-                    Enviar mensaje
-                  </motion.button>
+                  {/* Botones enviar mensaje y ver historias */}
+                  <div className="mt-4 flex flex-wrap justify-center gap-3">
+                    {selectedProfileStories.length > 0 && selectedProfileStories[0]?.stories?.length > 0 && (
+                      <motion.button
+                        whileTap={{ scale: 0.97 }}
+                        onClick={() => setStoryViewerOpen(true)}
+                        className="px-5 py-2.5 rounded-xl bg-cyan-500/40 hover:bg-cyan-500/50 text-cyan-100 text-sm font-medium flex items-center gap-2 border border-cyan-400/30"
+                      >
+                        Ver historias ({selectedProfileStories[0].stories.length})
+                      </motion.button>
+                    )}
+                    <motion.button
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => {
+                        closeProfile();
+                        handleSendMessage(selectedProfile.id);
+                      }}
+                      className="px-5 py-2.5 rounded-xl bg-cyan-500/40 hover:bg-cyan-500/50 text-cyan-100 text-sm font-medium flex items-center gap-2 border border-cyan-400/30"
+                    >
+                      <MessageCircle className="w-4 h-4" />
+                      Enviar mensaje
+                    </motion.button>
+                  </div>
                 </div>
 
                 {/* Jornadas compartidas */}
@@ -419,6 +448,18 @@ export function PescasubView({ onBack, onNavigate }: PescasubViewProps) {
               </div>
             </motion.div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Visor de historias del perfil visitado */}
+      <AnimatePresence>
+        {storyViewerOpen && selectedProfileStories.length > 0 && (
+          <StoryViewer
+            storiesByUser={selectedProfileStories}
+            initialUserIndex={0}
+            onClose={() => setStoryViewerOpen(false)}
+            onNavigate={onNavigate}
+          />
         )}
       </AnimatePresence>
     </div>

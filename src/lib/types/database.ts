@@ -80,6 +80,7 @@ export interface Database {
           dive_id: string;
           species: string;
           weight_kg: number | null;
+          length_cm: number | null;
           image_url: string | null;
           created_at: string;
         };
@@ -318,6 +319,7 @@ export interface Database {
           current_type: string | null;
           photo_urls: string[];
           video_url: string | null;
+          tagged_user_ids: string[] | null;
           created_at: string;
           updated_at: string;
         };

@@ -3,6 +3,7 @@ import type { Database } from '@/lib/types/database';
 
 export type SharedDive = Database['public']['Tables']['shared_dives']['Row'] & {
   user_profile?: { display_name: string | null; avatar_url: string | null } | null;
+  tagged_profiles?: Array<{ id: string; display_name: string | null; avatar_url: string | null }> | null;
   likes_count: number;
   comments_count: number;
   user_liked: boolean;
@@ -65,9 +66,9 @@ export async function getSharedDives(options?: {
       : Promise.resolve({ data: [] }),
   ]);
 
-  const profileMap = new Map<string, { display_name: string | null; avatar_url: string | null }>();
+  const profileMap = new Map<string, { id: string; display_name: string | null; avatar_url: string | null }>();
   (profilesRes.data ?? []).forEach((p) => {
-    profileMap.set(p.id, { display_name: p.display_name, avatar_url: p.avatar_url });
+    profileMap.set(p.id, { id: p.id, display_name: p.display_name, avatar_url: p.avatar_url });
   });
 
   const likesCount = new Map<string, number>();
@@ -82,14 +83,25 @@ export async function getSharedDives(options?: {
 
   const userLikedSet = new Set((userLikesRes.data ?? []).map((l) => l.shared_dive_id));
 
-  return dives.map((d) => ({
-    ...d,
-    photo_urls: d.photo_urls ?? [],
-    user_profile: profileMap.get(d.user_id) ?? null,
-    likes_count: likesCount.get(d.id) ?? 0,
-    comments_count: commentsCount.get(d.id) ?? 0,
-    user_liked: userLikedSet.has(d.id),
+  const taggedIdsByDive = (dives as Array<{ id: string; tagged_user_ids?: string[] | null }>).map((d) => ({
+    id: d.id,
+    ids: d.tagged_user_ids ?? [],
   }));
+  return dives.map((d) => {
+    const tagged = taggedIdsByDive.find((t) => t.id === d.id);
+    const tagged_profiles = (tagged?.ids ?? [])
+      .map((id) => profileMap.get(id))
+      .filter(Boolean) as Array<{ id: string; display_name: string | null; avatar_url: string | null }>;
+    return {
+      ...d,
+      photo_urls: d.photo_urls ?? [],
+      user_profile: profileMap.get(d.user_id) ?? null,
+      tagged_profiles: tagged_profiles.length ? tagged_profiles : null,
+      likes_count: likesCount.get(d.id) ?? 0,
+      comments_count: commentsCount.get(d.id) ?? 0,
+      user_liked: userLikedSet.has(d.id),
+    };
+  });
 }
 
 /** Obtener solo mis jornadas compartidas */
@@ -107,6 +119,127 @@ export async function getUserSharedDives(targetUserId: string, currentUserId?: s
   return getSharedDives({ currentUserId, filterByUserId: targetUserId });
 }
 
+/** Historias: jornadas de las últimas 24h, agrupadas por usuario. Usuarios con contenido nuevo primero. */
+export type StoriesByUser = {
+  user_id: string;
+  user_profile: { display_name: string | null; avatar_url: string | null } | null;
+  stories: SharedDive[];
+  has_unseen: boolean;
+};
+
+export async function getStoriesFeed(
+  currentUserId?: string,
+  filterByUserId?: string
+): Promise<StoriesByUser[]> {
+  const since = new Date();
+  since.setHours(since.getHours() - 24);
+  const sinceIso = since.toISOString();
+
+  let query = supabase
+    .from('shared_dives')
+    .select('*')
+    .gte('created_at', sinceIso)
+    .order('created_at', { ascending: false });
+
+  if (filterByUserId) {
+    query = query.eq('user_id', filterByUserId);
+  }
+
+  const { data: dives, error } = await query;
+  if (error) throw error;
+  if (!dives || dives.length === 0) return [];
+
+  const userIds = [...new Set(dives.map((d) => d.user_id))];
+  const diveIds = dives.map((d) => d.id);
+  const [profilesRes, likesRes, commentsRes, userLikesRes] = await Promise.all([
+    supabase.from('profiles').select('id, display_name, avatar_url').in('id', userIds),
+    supabase.from('shared_dive_likes').select('shared_dive_id').in('shared_dive_id', diveIds),
+    supabase.from('shared_dive_comments').select('shared_dive_id').in('shared_dive_id', diveIds),
+    currentUserId
+      ? supabase.from('shared_dive_likes').select('shared_dive_id').eq('user_id', currentUserId).in('shared_dive_id', diveIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const profileMap = new Map<string, { display_name: string | null; avatar_url: string | null }>();
+  (profilesRes.data ?? []).forEach((p) => profileMap.set(p.id, { display_name: p.display_name, avatar_url: p.avatar_url }));
+
+  const likesCount = new Map<string, number>();
+  (likesRes.data ?? []).forEach((l) => likesCount.set(l.shared_dive_id, (likesCount.get(l.shared_dive_id) ?? 0) + 1));
+  const commentsCount = new Map<string, number>();
+  (commentsRes.data ?? []).forEach((c) => commentsCount.set(c.shared_dive_id, (commentsCount.get(c.shared_dive_id) ?? 0) + 1));
+  const userLikedSet = new Set((userLikesRes.data ?? []).map((l) => l.shared_dive_id));
+
+  const enriched: SharedDive[] = dives.map((d) => ({
+    ...d,
+    photo_urls: d.photo_urls ?? [],
+    user_profile: profileMap.get(d.user_id) ?? null,
+    likes_count: likesCount.get(d.id) ?? 0,
+    comments_count: commentsCount.get(d.id) ?? 0,
+    user_liked: userLikedSet.has(d.id),
+  }));
+
+  const grouped = new Map<string, SharedDive[]>();
+  enriched.forEach((d) => {
+    if (!grouped.has(d.user_id)) grouped.set(d.user_id, []);
+    grouped.get(d.user_id)!.push(d);
+  });
+
+  const seenIds = getSeenStoryIds();
+
+  const result: StoriesByUser[] = [];
+  grouped.forEach((stories, uid) => {
+    const hasUnseen = stories.some((s) => !seenIds.has(s.id));
+    result.push({
+      user_id: uid,
+      user_profile: profileMap.get(uid) ?? null,
+      stories,
+      has_unseen: hasUnseen,
+    });
+  });
+
+  result.sort((a, b) => {
+    if (a.has_unseen && !b.has_unseen) return -1;
+    if (!a.has_unseen && b.has_unseen) return 1;
+    const aLatest = a.stories[0]?.created_at ?? '';
+    const bLatest = b.stories[0]?.created_at ?? '';
+    return bLatest.localeCompare(aLatest);
+  });
+
+  return result;
+}
+
+export const STORIES_SEEN_KEY = 'pelagos_seen_stories';
+export const STORIES_SEEN_DATE_KEY = 'pelagos_seen_stories_date';
+
+export function markStoriesAsSeen(diveIds: string[]): void {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const storedDate = localStorage.getItem(STORIES_SEEN_DATE_KEY);
+    let seen = new Set<string>();
+    if (storedDate === today) {
+      const stored = localStorage.getItem(STORIES_SEEN_KEY);
+      if (stored) seen = new Set(JSON.parse(stored));
+    }
+    diveIds.forEach((id) => seen.add(id));
+    localStorage.setItem(STORIES_SEEN_DATE_KEY, today);
+    localStorage.setItem(STORIES_SEEN_KEY, JSON.stringify([...seen]));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getSeenStoryIds(): Set<string> {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const storedDate = localStorage.getItem(STORIES_SEEN_DATE_KEY);
+    if (storedDate !== today) return new Set();
+    const stored = localStorage.getItem(STORIES_SEEN_KEY);
+    return stored ? new Set(JSON.parse(stored)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
 export async function createSharedDive(
   userId: string,
   payload: CreateSharedDivePayload
@@ -121,6 +254,7 @@ export async function createSharedDive(
       apnea_time_seconds: payload.apnea_time_seconds ?? null,
       current_type: payload.current_type?.trim() || null,
       dive_id: payload.dive_id ?? null,
+      tagged_user_ids: payload.tagged_user_ids ?? [],
       photo_urls: [],
       video_url: null,
     })

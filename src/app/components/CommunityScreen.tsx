@@ -62,6 +62,7 @@ type CommunityMenu = 'grupos' | 'compartir' | 'quedadas' | 'pescasub' | 'campeon
 const OPEN_QUEDADA_KEY = 'open_quedada_id';
 const COMMUNITY_OPEN_QUEDADAS_KEY = 'community_open_quedadas';
 const COMMUNITY_OPEN_PESCASUB_KEY = 'community_open_pescasub';
+const COMMUNITY_OPEN_SHARE_DIVE_KEY = 'pelagos_open_share_dive';
 
 interface CommunityScreenProps {
   onNavigate: (screen: string) => void;
@@ -84,6 +85,7 @@ export function CommunityScreen({ onNavigate }: CommunityScreenProps) {
   const [menuActivo, setMenuActivo] = useState<CommunityMenu | null>(null);
   const [initialQuedadaId, setInitialQuedadaId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [openShareDiveForm, setOpenShareDiveForm] = useState(false);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -93,6 +95,12 @@ export function CommunityScreen({ onNavigate }: CommunityScreenProps) {
 
   useEffect(() => {
     try {
+      if (sessionStorage.getItem(COMMUNITY_OPEN_SHARE_DIVE_KEY)) {
+        sessionStorage.removeItem(COMMUNITY_OPEN_SHARE_DIVE_KEY);
+        setMenuActivo('compartir');
+        setOpenShareDiveForm(true);
+        return;
+      }
       if (sessionStorage.getItem(COMMUNITY_OPEN_QUEDADAS_KEY) && sessionStorage.getItem(OPEN_QUEDADA_KEY)) {
         const id = sessionStorage.getItem(OPEN_QUEDADA_KEY);
         sessionStorage.removeItem(COMMUNITY_OPEN_QUEDADAS_KEY);
@@ -134,9 +142,16 @@ export function CommunityScreen({ onNavigate }: CommunityScreenProps) {
     );
   }
 
-  // Compartir jornada: red social
+  // Compartir jornada: red social (con opción de abrir modal crear al entrar desde + del home)
   if (menuActivo === 'compartir') {
-    return <SharedDivesView userId={userId} onBack={() => setMenuActivo(null)} />;
+    return (
+      <SharedDivesView
+        userId={userId}
+        onBack={() => { setMenuActivo(null); setOpenShareDiveForm(false); }}
+        initialOpenCreate={openShareDiveForm}
+        onCreateFormClosed={() => setOpenShareDiveForm(false)}
+      />
+    );
   }
 
   // Otras subvistas (grupos): placeholder

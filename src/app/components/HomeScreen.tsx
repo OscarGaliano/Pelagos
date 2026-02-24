@@ -1,11 +1,20 @@
 import { getHomeSections, getNews, type HomeSection, type News } from '@/lib/api/adminPanel';
 import { getNovedadesQuedadas } from '@/lib/api/quedadas';
-import { getAllSharedDives, toggleLike, type SharedDive } from '@/lib/api/sharedDives';
+import {
+  addComment,
+  deleteComment,
+  getComments,
+  getAllSharedDives,
+  toggleLike,
+  type SharedDive,
+  type SharedDiveComment,
+} from '@/lib/api/sharedDives';
 import { supabase } from '@/lib/supabase';
 import type { Quedada } from '@/lib/types';
-import { Activity, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Eye, EyeOff, Heart, MapPin, MessageCircle, Newspaper, Shield, Users } from 'lucide-react';
+import { ensureAbsoluteUrl, ensureAbsoluteUrls } from '@/lib/urlUtils';
+import { Activity, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Eye, EyeOff, Heart, Loader2, MapPin, MessageCircle, Newspaper, Share2, Shield, Users, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Slider from 'react-slick';
 import 'slick-carousel/slick/slick-theme.css';
 import 'slick-carousel/slick/slick.css';
@@ -22,9 +31,22 @@ const images = [
 
 const TIPO_LABEL: Record<string, string> = { quedada: 'Quedada', salida: 'Salida' };
 
+function formatTimeAgo(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffMins < 1) return 'Ahora';
+  if (diffMins < 60) return `Hace ${diffMins} min`;
+  if (diffHours < 24) return `Hace ${diffHours}h`;
+  if (diffDays < 7) return `Hace ${diffDays}d`;
+  return date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+}
+
 const STORAGE_KEY_HIDDEN = 'pelagos_home_hidden_sections';
 const STORAGE_KEY_HIDDEN_CUSTOM = 'pelagos_home_hidden_custom_sections';
-const STORAGE_KEY_SEEN_DIVES = 'pelagos_seen_dive_ids';
 
 type SectionId = 'comunidad' | 'novedades' | 'noticias';
 
@@ -40,6 +62,9 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
   const [feedDives, setFeedDives] = useState<SharedDive[]>([]);
   const [feedLoading, setFeedLoading] = useState(true);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [selectedDiveForComments, setSelectedDiveForComments] = useState<SharedDive | null>(null);
+  const [shareMenuDiveId, setShareMenuDiveId] = useState<string | null>(null);
+  const [likingId, setLikingId] = useState<string | null>(null);
   const [news, setNews] = useState<News[]>([]);
   const [newsLoading, setNewsLoading] = useState(true);
   const [customSections, setCustomSections] = useState<HomeSection[]>([]);
@@ -67,27 +92,10 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
     }
   });
 
-  // IDs de jornadas ya vistas
-  const [seenDiveIds, setSeenDiveIds] = useState<Set<string>>(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY_SEEN_DIVES);
-      return stored ? new Set(JSON.parse(stored)) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
-
   // Guardar secciones ocultas
   const saveHiddenSections = (sections: Set<SectionId>) => {
     try {
       localStorage.setItem(STORAGE_KEY_HIDDEN, JSON.stringify([...sections]));
-    } catch { /* ignore */ }
-  };
-
-  // Guardar jornadas vistas
-  const saveSeenDives = (ids: Set<string>) => {
-    try {
-      localStorage.setItem(STORAGE_KEY_SEEN_DIVES, JSON.stringify([...ids]));
     } catch { /* ignore */ }
   };
 
@@ -119,19 +127,6 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
     });
   };
 
-  // Marcar jornadas como vistas
-  const markDivesAsSeen = useCallback(() => {
-    if (feedDives.length > 0) {
-      const newSeenIds = new Set(seenDiveIds);
-      feedDives.forEach(d => newSeenIds.add(d.id));
-      setSeenDiveIds(newSeenIds);
-      saveSeenDives(newSeenIds);
-    }
-  }, [feedDives, seenDiveIds]);
-
-  // Verificar si hay jornadas nuevas (no vistas)
-  const hasUnseenDives = feedDives.some(d => !seenDiveIds.has(d.id));
-
   const loadData = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     setCurrentUserId(user?.id ?? null);
@@ -147,11 +142,11 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
       setNovedadesLoading(false);
     }
 
-    // Cargar feed social (últimas 10 jornadas)
+    // Cargar feed de publicaciones (estilo Instagram)
     setFeedLoading(true);
     try {
-      const dives = await getAllSharedDives(user?.id ?? undefined, 10);
-      setFeedDives(dives);
+      const feed = await getAllSharedDives(user?.id ?? undefined, 40);
+      setFeedDives(feed);
     } catch {
       setFeedDives([]);
     } finally {
@@ -193,18 +188,6 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
     loadData();
   }, [loadData]);
 
-  const handleLikeDive = async (dive: SharedDive) => {
-    if (!currentUserId) return;
-    const liked = await toggleLike(dive.id, currentUserId);
-    setFeedDives((prev) =>
-      prev.map((d) =>
-        d.id === dive.id
-          ? { ...d, user_liked: liked, likes_count: d.likes_count + (liked ? 1 : -1) }
-          : d
-      )
-    );
-  };
-
   const openNovedad = (q: Quedada) => {
     try {
       sessionStorage.setItem('open_quedada_id', q.id);
@@ -240,8 +223,9 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
   };
 
   // Determinar si mostrar comunidad: 
-  // - No oculta manualmente Y (hay jornadas sin ver O el usuario la mostró manualmente)
-  const showComunidad = !hiddenSections.has('comunidad') && (hasUnseenDives || feedDives.length === 0);
+  // - No oculta manualmente Y (hay historias sin ver O no hay historias)
+  // Jornadas compartidas = feed tipo publicaciones Instagram (no historias); siempre mostrar si la sección está visible
+  const showComunidad = !hiddenSections.has('comunidad');
   const showNovedades = !hiddenSections.has('novedades');
   const showNoticias = !hiddenSections.has('noticias');
 
@@ -317,30 +301,17 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
   );
 
   // Contar jornadas no vistas
-  const unseenCount = feedDives.filter(d => !seenDiveIds.has(d.id)).length;
 
   return (
-    <div className={`relative min-h-screen ${isDark ? 'bg-[#0a1628]' : 'bg-gradient-to-b from-slate-200 to-slate-300'}`}>
-      <div className="absolute inset-0 h-screen -mt-[72px] pt-[72px] overflow-hidden">
-        <Slider {...bgSettings} className="h-full">
-          {images.map((img, index) => (
-            <div key={index} className="relative h-screen">
-              <div
-                className="h-full w-full bg-cover bg-center"
-                style={{ backgroundImage: `url(${img})` }}
-              />
-              <div className={`absolute inset-0 bg-gradient-to-b from-transparent via-transparent ${isDark ? 'to-[#0a1628]/90' : 'to-slate-200/95'}`} />
-            </div>
-          ))}
-        </Slider>
-      </div>
-
-      <div className="absolute bottom-0 left-0 right-0 z-20 px-4 pb-6 pt-2 max-h-[70vh] overflow-y-auto">
+    <div className={`relative min-h-screen min-h-[100dvh] ${isDark ? 'bg-transparent' : 'bg-transparent'}`}>
+      {/* El carrusel de fondo se renderiza en App (HomeBackgroundCarousel) para verse a pantalla completa. */}
+      {/* Contenido principal: ocupa todo el espacio bajo el header, scroll completo */}
+      <div className="relative z-10 w-full px-3 sm:px-4 pb-6 pt-2 min-h-full overflow-y-auto">
         <motion.div
-          initial={{ opacity: 0, y: 30 }}
+          initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.2 }}
-          className="space-y-3"
+          transition={{ duration: 0.5, delay: 0.1 }}
+          className="space-y-3 pt-2"
         >
           {/* 1. COMUNIDAD - Jornadas compartidas (estilo Instagram) */}
           <AnimatePresence mode="wait">
@@ -360,143 +331,149 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
                   id="comunidad" 
                   icon={Users} 
                   title="Comunidad" 
-                  subtitle="Jornadas de pescasubs"
+                  subtitle="Publicaciones"
                   isHidden={false}
-                  badge={unseenCount}
                 />
-                
+                {/* Feed de publicaciones (estilo Instagram): me gusta y comentarios. El botón + del header lleva a Compartir jornada. */}
                 {feedLoading ? (
-                  <div className={`h-24 flex items-center justify-center text-sm ${isDark ? 'text-cyan-400/80' : 'text-blue-600/80'}`}>Cargando…</div>
+                  <div className={`h-24 flex items-center justify-center text-sm ${isDark ? 'text-cyan-400/80' : 'text-slate-500'}`}>Cargando…</div>
                 ) : feedDives.length === 0 ? (
-                  <div className="px-4 pb-4">
-                    <div className={`py-6 flex flex-col items-center justify-center text-sm ${isDark ? 'text-cyan-300/80' : 'text-blue-800/80'}`}>
-                      <p className="mb-2">Aún no hay jornadas compartidas</p>
-                      <motion.button
-                        whileTap={{ scale: 0.98 }}
-                        onClick={() => onNavigate('community')}
-                        className={`text-xs underline ${isDark ? 'text-cyan-400' : 'text-blue-600'}`}
-                      >
-                        Sé el primero en compartir
-                      </motion.button>
-                    </div>
-                  </div>
+                  <p className={`px-3 pb-4 text-sm ${isDark ? 'text-cyan-400/60' : 'text-slate-500'}`}>Aún no hay publicaciones. Comparte tu primera jornada.</p>
                 ) : (
-                  <>
-                    {/* Feed vertical tipo Instagram */}
-                    <div className="px-3 pb-2 space-y-3 max-h-[45vh] overflow-y-auto">
-                      {feedDives.slice(0, 5).map((dive, index) => {
-                        // Marcar como visto cuando aparece
-                        if (!seenDiveIds.has(dive.id)) {
-                          setTimeout(() => markDivesAsSeen(), 1000);
-                        }
-                        
-                        return (
-                          <motion.div 
-                            key={dive.id}
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: index * 0.05 }}
-                            className={`rounded-xl border overflow-hidden shadow-sm ${
-                              isDark
-                                ? `bg-[#0a1628]/60 ${seenDiveIds.has(dive.id) ? 'border-cyan-400/10' : 'border-cyan-400/30'}`
-                                : `bg-slate-50 ${seenDiveIds.has(dive.id) ? 'border-slate-300' : 'border-blue-500/50'}`
-                            }`}
-                          >
-                            {/* Header del post */}
-                            <div className="flex items-center gap-2 p-2.5">
-                              <div className={`h-8 w-8 rounded-full flex items-center justify-center overflow-hidden border flex-shrink-0 ${
-                                isDark ? 'bg-cyan-500/30 border-cyan-400/30' : 'bg-blue-600/20 border-blue-600/30'
-                              }`}>
-                                {dive.user_profile?.avatar_url ? (
-                                  <img src={dive.user_profile.avatar_url} alt="" className="h-full w-full object-cover" />
-                                ) : (
-                                  <span className={`text-[10px] font-medium ${isDark ? 'text-cyan-200' : 'text-blue-800'}`}>
-                                    {(dive.user_profile?.display_name || 'U').slice(0, 2).toUpperCase()}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <span className={`text-sm font-medium truncate block ${isDark ? 'text-white' : 'text-blue-900'}`}>
-                                  {dive.user_profile?.display_name || 'Usuario'}
-                                </span>
-                              </div>
-                              {!seenDiveIds.has(dive.id) && (
-                                <span className={`text-white text-[9px] px-1.5 py-0.5 rounded font-medium ${isDark ? 'bg-cyan-500' : 'bg-blue-600'}`}>
-                                  Nuevo
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Imagen/Video */}
-                            {dive.photo_urls.length > 0 ? (
-                              <div className="relative">
-                                <img 
-                                  src={dive.photo_urls[0]} 
-                                  alt="" 
-                                  className="w-full aspect-square object-cover"
-                                />
-                                {dive.photo_urls.length > 1 && (
-                                  <span className="absolute top-2 right-2 bg-black/60 text-white text-xs px-2 py-0.5 rounded-full">
-                                    1/{dive.photo_urls.length}
-                                  </span>
-                                )}
-                              </div>
-                            ) : dive.video_url ? (
-                              <video
-                                src={dive.video_url}
-                                controls
-                                className="w-full aspect-video bg-black"
-                                preload="metadata"
-                              />
-                            ) : null}
-
-                            {/* Acciones y descripción */}
-                            <div className="p-2.5">
-                              <div className="flex items-center gap-4 mb-2">
-                                <button
-                                  onClick={() => handleLikeDive(dive)}
-                                  className={`flex items-center gap-1.5 ${
-                                    dive.user_liked ? 'text-red-400' : 'text-cyan-300/80'
-                                  }`}
-                                >
-                                  <Heart className={`w-5 h-5 ${dive.user_liked ? 'fill-current' : ''}`} />
-                                </button>
-                                <span className="flex items-center gap-1.5 text-cyan-300/80">
-                                  <MessageCircle className="w-5 h-5" />
-                                </span>
-                              </div>
-                              
-                              {(dive.likes_count > 0 || dive.comments_count > 0) && (
-                                <p className="text-white text-xs font-medium mb-1">
-                                  {dive.likes_count > 0 && `${dive.likes_count} me gusta`}
-                                  {dive.likes_count > 0 && dive.comments_count > 0 && ' · '}
-                                  {dive.comments_count > 0 && `${dive.comments_count} comentarios`}
-                                </p>
-                              )}
-
-                              {dive.description && (
-                                <p className="text-cyan-100/90 text-xs line-clamp-2">
-                                  <span className="font-medium text-white">{dive.user_profile?.display_name || 'Usuario'}</span>{' '}
-                                  {dive.description}
-                                </p>
-                              )}
-                            </div>
-                          </motion.div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Botón ver más - más pequeño */}
-                    <div className="px-3 pb-3 pt-1">
-                      <motion.button
-                        whileTap={{ scale: 0.98 }}
-                        onClick={() => onNavigate('community')}
-                        className="w-full py-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-400 text-xs border border-cyan-400/20"
+                  <div className="px-3 pb-4 space-y-4">
+                    {feedDives.map((dive) => (
+                      <motion.div
+                        key={dive.id}
+                        layout
+                        className={`rounded-xl border overflow-hidden ${
+                          isDark ? 'border-cyan-400/20 bg-white/5' : 'border-slate-300 bg-slate-50'
+                        }`}
                       >
-                        Ver más en comunidad
-                      </motion.button>
-                    </div>
-                  </>
+                        <div className="flex items-center gap-2 p-2">
+                          <div className={`w-9 h-9 rounded-full overflow-hidden flex-shrink-0 ${isDark ? 'bg-cyan-500/30' : 'bg-cyan-100'}`}>
+                            {dive.user_profile?.avatar_url ? (
+                              <img src={ensureAbsoluteUrl(dive.user_profile.avatar_url)} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <span className={`w-full h-full flex items-center justify-center text-xs font-bold ${isDark ? 'text-cyan-200' : 'text-cyan-800'}`}>
+                                {(dive.user_profile?.display_name || 'U').slice(0, 1)}
+                              </span>
+                            )}
+                          </div>
+                          <span className={`text-sm font-medium truncate flex-1 ${isDark ? 'text-white' : 'text-slate-800'}`}>{dive.user_profile?.display_name || 'Usuario'}</span>
+                          {(dive as SharedDive & { tagged_profiles?: Array<{ display_name: string | null }> }).tagged_profiles?.length ? (
+                            <span className={`text-xs truncate max-w-[120px] ${isDark ? 'text-cyan-400/80' : 'text-slate-500'}`}>
+                              con {(dive as SharedDive & { tagged_profiles: Array<{ display_name: string | null }> }).tagged_profiles.map((t) => t.display_name || '').filter(Boolean).join(', ')}
+                            </span>
+                          ) : null}
+                        </div>
+                        {(dive.photo_urls?.length > 0 || dive.video_url) && (
+                          <div className="aspect-square max-h-80 w-full bg-black/30">
+                            {dive.photo_urls?.length > 0 ? (
+                              <img src={ensureAbsoluteUrl(dive.photo_urls[0])} alt="" className="w-full h-full object-cover" />
+                            ) : dive.video_url ? (
+                              <video src={ensureAbsoluteUrl(dive.video_url)} className="w-full h-full object-cover" preload="metadata" muted playsInline />
+                            ) : null}
+                          </div>
+                        )}
+                        {dive.description && (
+                          <p className={`px-2 py-1.5 text-sm line-clamp-2 ${isDark ? 'text-cyan-200/90' : 'text-slate-600'}`}>{dive.description}</p>
+                        )}
+                        <div className="flex items-center gap-4 px-2 py-2 border-t border-cyan-400/10">
+                          <button
+                            type="button"
+                            disabled={!currentUserId || likingId === dive.id}
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!currentUserId) return;
+                              setLikingId(dive.id);
+                              try {
+                                const liked = await toggleLike(dive.id, currentUserId);
+                                setFeedDives((prev) => prev.map((d) => (d.id === dive.id ? { ...d, user_liked: liked, likes_count: d.likes_count + (liked ? 1 : -1) } : d)));
+                              } finally {
+                                setLikingId(null);
+                              }
+                            }}
+                            className={`flex items-center gap-1.5 text-sm disabled:opacity-60 ${dive.user_liked ? 'text-red-400' : isDark ? 'text-cyan-300/80 hover:text-red-400' : 'text-slate-600 hover:text-red-500'}`}
+                          >
+                            {likingId === dive.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Heart className={`w-4 h-4 ${dive.user_liked ? 'fill-current' : ''}`} />}
+                            <span>{dive.likes_count}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setSelectedDiveForComments(dive); }}
+                            className={`flex items-center gap-1.5 text-sm ${isDark ? 'text-cyan-300/80 hover:text-cyan-300' : 'text-slate-600 hover:text-slate-800'}`}
+                          >
+                            <MessageCircle className="w-4 h-4" />
+                            <span>{dive.comments_count}</span>
+                          </button>
+                          <div className="relative ml-auto">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setShareMenuDiveId(shareMenuDiveId === dive.id ? null : dive.id);
+                              }}
+                              className={`flex items-center gap-1.5 text-sm ${isDark ? 'text-cyan-300/80 hover:text-cyan-300' : 'text-slate-600 hover:text-slate-800'}`}
+                            >
+                              <Share2 className="w-4 h-4" />
+                              <span>Compartir</span>
+                            </button>
+                            {shareMenuDiveId === dive.id && (
+                              <>
+                                <div
+                                  className="fixed inset-0 z-10"
+                                  aria-hidden
+                                  onClick={(e) => { e.stopPropagation(); setShareMenuDiveId(null); }}
+                                />
+                                <div
+                                  className={`absolute right-0 bottom-full mb-1 z-20 rounded-xl border shadow-xl overflow-hidden min-w-[180px] ${isDark ? 'bg-[#0c1f3a] border-cyan-400/20' : 'bg-white border-slate-200 shadow-lg'}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <div className={`px-3 py-2 border-b ${isDark ? 'border-cyan-400/20' : 'border-slate-200'}`}>
+                                    <p className={`text-xs font-medium ${isDark ? 'text-cyan-300' : 'text-slate-600'}`}>Compartir en</p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const text = dive.description ? `🎣 ${dive.description.slice(0, 100)}${dive.description.length > 100 ? '...' : ''}` : '🎣 ¡Mira esta jornada de pesca submarina en Pelagos!';
+                                      const url = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.origin)}&quote=${encodeURIComponent(text)}`;
+                                      window.open(url, '_blank', 'width=600,height=400');
+                                      setShareMenuDiveId(null);
+                                    }}
+                                    className={`flex items-center gap-3 px-4 py-3 w-full ${isDark ? 'text-white hover:bg-cyan-500/20' : 'text-slate-800 hover:bg-slate-100'}`}
+                                  >
+                                    <svg className="w-5 h-5 text-[#1877F2]" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+                                    <span className="text-sm">Facebook</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      const text = dive.description ? `🎣 ${dive.description.slice(0, 100)}${dive.description.length > 100 ? '...' : ''}` : '🎣 ¡Mira esta jornada de pesca submarina en Pelagos!';
+                                      const url = window.location.origin;
+                                      if (navigator.share) {
+                                        try {
+                                          await navigator.share({ title: 'Pelagos', text, url });
+                                        } catch {
+                                          await navigator.clipboard.writeText(`${text}\n\n${url}`);
+                                        }
+                                      } else {
+                                        await navigator.clipboard.writeText(`${text}\n\n${url}`);
+                                      }
+                                      setShareMenuDiveId(null);
+                                    }}
+                                    className={`flex items-center gap-3 px-4 py-3 w-full border-t ${isDark ? 'text-white hover:bg-cyan-500/20 border-cyan-400/20' : 'text-slate-800 hover:bg-slate-100 border-slate-200'}`}
+                                  >
+                                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none"><defs><linearGradient id="ig" x1="0%" y1="100%" x2="100%" y2="0%"><stop offset="0%" stopColor="#FFDC80"/><stop offset="25%" stopColor="#FCAF45"/><stop offset="50%" stopColor="#F77737"/><stop offset="75%" stopColor="#E1306C"/><stop offset="100%" stopColor="#833AB4"/></linearGradient></defs><rect x="2" y="2" width="20" height="20" rx="5" stroke="url(#ig)" strokeWidth="2"/><circle cx="12" cy="12" r="4" stroke="url(#ig)" strokeWidth="2"/><circle cx="18" cy="6" r="1.5" fill="url(#ig)"/></svg>
+                                    <span className="text-sm">Instagram (copiar enlace)</span>
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
                 )}
               </motion.div>
             ) : (
@@ -686,13 +663,164 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
           <SectionDetailModal section={selectedSection} onClose={() => setSelectedSection(null)} isDark={isDark} />
         )}
       </AnimatePresence>
+
+      {/* Panel de comentarios (feed tipo Instagram) */}
+      <AnimatePresence>
+        {selectedDiveForComments && (
+          <CommentsSheet
+            dive={selectedDiveForComments}
+            userId={currentUserId}
+            onClose={() => setSelectedDiveForComments(null)}
+            onCommentsUpdated={(count) => {
+              setFeedDives((prev) => prev.map((d) => (d.id === selectedDiveForComments.id ? { ...d, comments_count: count } : d)));
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
+  );
+}
+
+/** Panel de comentarios para una publicación del feed */
+function CommentsSheet({
+  dive,
+  userId,
+  onClose,
+  onCommentsUpdated,
+}: {
+  dive: SharedDive;
+  userId: string | null;
+  onClose: () => void;
+  onCommentsUpdated: (count: number) => void;
+}) {
+  const [comments, setComments] = useState<SharedDiveComment[]>([]);
+  const [loadingComments, setLoadingComments] = useState(true);
+  const [newComment, setNewComment] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    getComments(dive.id)
+      .then(setComments)
+      .finally(() => setLoadingComments(false));
+  }, [dive.id]);
+
+  const handleAdd = async () => {
+    if (!userId || !newComment.trim()) return;
+    setSubmitting(true);
+    try {
+      const c = await addComment(dive.id, userId, newComment.trim());
+      setComments((prev) => [...prev, c]);
+      setNewComment('');
+      onCommentsUpdated(comments.length + 1);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDelete = async (commentId: string) => {
+    if (!userId) return;
+    await deleteComment(commentId, userId);
+    setComments((prev) => prev.filter((c) => c.id !== commentId));
+    onCommentsUpdated(comments.length - 1);
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-lg max-h-[85vh] overflow-hidden bg-[#0c1f3a] border border-cyan-400/20 rounded-t-2xl sm:rounded-2xl flex flex-col"
+      >
+        <div className="flex items-center gap-3 p-3 border-b border-cyan-400/20">
+          <div className="h-9 w-9 rounded-full bg-cyan-500/30 flex items-center justify-center overflow-hidden flex-shrink-0">
+            {dive.user_profile?.avatar_url ? (
+              <img src={ensureAbsoluteUrl(dive.user_profile.avatar_url)} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <span className="text-cyan-200 text-xs font-medium">{(dive.user_profile?.display_name || 'U').slice(0, 1)}</span>
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-white font-medium text-sm truncate">{dive.user_profile?.display_name || 'Usuario'}</p>
+            <p className="text-cyan-400/70 text-xs">{formatTimeAgo(dive.created_at)}</p>
+          </div>
+          <button type="button" onClick={onClose} className="p-2 rounded-lg hover:bg-white/10 text-cyan-300">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-3">
+          <p className="text-cyan-200 text-sm font-medium mb-2">Comentarios ({comments.length})</p>
+          {loadingComments ? (
+            <div className="flex justify-center py-6">
+              <Loader2 className="w-6 h-6 text-cyan-400 animate-spin" />
+            </div>
+          ) : comments.length === 0 ? (
+            <p className="text-cyan-400/60 text-sm">Sin comentarios aún.</p>
+          ) : (
+            <div className="space-y-3">
+              {comments.map((c) => (
+                <div key={c.id} className="flex gap-2">
+                  <div className="h-8 w-8 rounded-full bg-cyan-500/30 flex-shrink-0 flex items-center justify-center overflow-hidden">
+                    {c.user_profile?.avatar_url ? (
+                      <img src={ensureAbsoluteUrl(c.user_profile.avatar_url)} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <span className="text-cyan-200 text-xs">{(c.user_profile?.display_name || 'U').slice(0, 1)}</span>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0 bg-white/5 rounded-xl px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-cyan-200 text-xs font-medium truncate">{c.user_profile?.display_name || 'Usuario'}</p>
+                      {userId === c.user_id && (
+                        <button type="button" onClick={() => handleDelete(c.id)} className="text-red-400/80 hover:text-red-400 text-xs">
+                          Eliminar
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-white text-sm mt-0.5 break-words">{c.content}</p>
+                    <p className="text-cyan-400/50 text-xs mt-1">{formatTimeAgo(c.created_at)}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        {userId && (
+          <div className="p-3 border-t border-cyan-400/20 flex gap-2">
+            <input
+              type="text"
+              value={newComment}
+              onChange={(e) => setNewComment(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+              placeholder="Añadir comentario..."
+              className="flex-1 rounded-xl bg-white/10 border border-cyan-400/20 px-3 py-2 text-white placeholder-cyan-400/50 text-sm"
+            />
+            <button
+              type="button"
+              onClick={handleAdd}
+              disabled={submitting || !newComment.trim()}
+              className="px-4 py-2 rounded-xl bg-cyan-500/80 hover:bg-cyan-500 text-white text-sm font-medium disabled:opacity-50"
+            >
+              {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Enviar'}
+            </button>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
   );
 }
 
 // Componente para mostrar una noticia (clickeable)
 function NewsCard({ news, onClick, isDark }: { news: News; onClick: () => void; isDark: boolean }) {
-  const images = news.images && news.images.length > 0 ? news.images : (news.image_url ? [news.image_url] : []);
+  const rawImages = news.images && news.images.length > 0 ? news.images : (news.image_url ? [news.image_url] : []);
+  const images = ensureAbsoluteUrls(rawImages);
 
   return (
     <motion.button
@@ -729,7 +857,8 @@ function NewsCard({ news, onClick, isDark }: { news: News; onClick: () => void; 
 // Modal de detalle de noticia
 function NewsDetailModal({ news, onClose, isDark }: { news: News; onClose: () => void; isDark: boolean }) {
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
-  const images = news.images && news.images.length > 0 ? news.images : (news.image_url ? [news.image_url] : []);
+  const rawImages = news.images && news.images.length > 0 ? news.images : (news.image_url ? [news.image_url] : []);
+  const images = ensureAbsoluteUrls(rawImages);
 
   const goToImage = (idx: number) => setCurrentImageIndex(idx);
 
@@ -789,7 +918,7 @@ function NewsDetailModal({ news, onClose, isDark }: { news: News; onClose: () =>
           <h2 className={`font-semibold text-xl mb-3 ${isDark ? 'text-white' : 'text-slate-900'}`}>{news.title}</h2>
           {news.content && <p className={`text-sm whitespace-pre-wrap mb-4 ${isDark ? 'text-cyan-200/90' : 'text-slate-700'}`}>{news.content}</p>}
           {news.link_url && (
-            <a href={news.link_url} target="_blank" rel="noopener noreferrer" className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm border ${
+            <a href={ensureAbsoluteUrl(news.link_url)} target="_blank" rel="noopener noreferrer" className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm border ${
               isDark 
                 ? 'bg-cyan-500/20 text-cyan-400 border-cyan-400/30 hover:bg-cyan-500/30' 
                 : 'bg-blue-100 text-blue-700 border-blue-300 hover:bg-blue-200'
@@ -930,7 +1059,7 @@ function CustomSectionCard({ section, onClick, onHide, adminAvatar, adminName, i
           {links.map((link, idx) => (
             <a
               key={idx}
-              href={link.url}
+              href={ensureAbsoluteUrl(link.url)}
               target="_blank"
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
@@ -965,7 +1094,7 @@ function CustomSectionCard({ section, onClick, onHide, adminAvatar, adminName, i
 // Modal de detalle de sección
 function SectionDetailModal({ section, onClose, isDark }: { section: HomeSection; onClose: () => void; isDark: boolean }) {
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
-  const images = section.images || [];
+  const images = ensureAbsoluteUrls(section.images || []);
   const links = section.links || [];
   const htmlContent = (section.content as { html?: string })?.html;
 
@@ -1055,7 +1184,7 @@ function SectionDetailModal({ section, onClose, isDark }: { section: HomeSection
                 {links.map((link, idx) => (
                   <a
                     key={idx}
-                    href={link.url}
+                    href={ensureAbsoluteUrl(link.url)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm border transition-colors ${

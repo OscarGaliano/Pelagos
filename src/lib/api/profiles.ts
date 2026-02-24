@@ -1,3 +1,4 @@
+import { uniqueCitiesByNormalized } from '@/lib/cityUtils';
 import { supabase } from '@/lib/supabase';
 import type { Profile } from '@/lib/types';
 
@@ -16,6 +17,18 @@ export async function getProfile(userId: string): Promise<Profile | null> {
   const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
   if (error) throw error;
   return data as Profile | null;
+}
+
+/** Lista de ciudades distintas (solo ciudad, sin pueblo) para sugerencias al editar ubicación. Unifica Málaga/Malaga, etc. */
+export async function getDistinctLocations(): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('location')
+    .not('location', 'is', null);
+  if (error) throw error;
+  const locations = (data ?? []).map((r: { location: string | null }) => r.location);
+  const cities = uniqueCitiesByNormalized(locations);
+  return cities.map((c) => c.display).sort((a, b) => a.localeCompare(b));
 }
 
 /** Lista de perfiles para la sección Pescasub (avatar, nivel, zona, miembro desde, tipo pesca). */

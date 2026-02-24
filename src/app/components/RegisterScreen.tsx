@@ -63,9 +63,13 @@ const APNEA_LEVELS = [
 interface RegisterScreenProps {
   onNavigate?: (screen: string) => void;
   onBack?: () => void;
+  /** Mensaje cuando falla la conexión con el servidor (ej. ERR_CONNECTION_CLOSED). */
+  connectionError?: string | null;
+  /** Llamar para reintentar conectar (getSession). */
+  onRetryConnection?: () => void;
 }
 
-export function RegisterScreen({ onNavigate, onBack }: RegisterScreenProps) {
+export function RegisterScreen({ onNavigate, onBack, connectionError, onRetryConnection }: RegisterScreenProps) {
   const [isLoginMode, setIsLoginMode] = useState(true);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -347,6 +351,19 @@ export function RegisterScreen({ onNavigate, onBack }: RegisterScreenProps) {
       <div className="absolute inset-0 z-10 flex flex-col pt-[88px] pb-6 px-4">
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="max-w-md mx-auto">
+            {/* Error de conexión (ERR_CONNECTION_CLOSED / Failed to fetch) */}
+            {connectionError && onRetryConnection && (
+              <div className="mb-4 rounded-xl bg-amber-500/20 border border-amber-400/40 px-4 py-3 flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                <p className="text-amber-200 text-sm flex-1">{connectionError}</p>
+                <Button
+                  type="button"
+                  onClick={onRetryConnection}
+                  className="shrink-0 h-9 px-4 bg-amber-500/80 hover:bg-amber-500 text-white border-amber-400/50"
+                >
+                  Reintentar
+                </Button>
+              </div>
+            )}
             {/* Tabs Iniciar sesión / Crear cuenta */}
             <div className="flex rounded-xl bg-white/10 p-1 mb-4 border border-cyan-400/20">
               <button

@@ -211,6 +211,68 @@ export async function getStoriesFeed(
 export const STORIES_SEEN_KEY = 'pelagos_seen_stories';
 export const STORIES_SEEN_DATE_KEY = 'pelagos_seen_stories_date';
 
+/** Clave para guardar cuándo se vio cada publicación del feed (main page) */
+export const FEED_SEEN_KEY = 'pelagos_feed_seen';
+
+/** Marca una publicación del feed como vista (usa timestamp para calcular 24h) */
+export function markFeedPublicationAsSeen(diveId: string): void {
+  try {
+    const stored = localStorage.getItem(FEED_SEEN_KEY);
+    const seen: Record<string, string> = stored ? JSON.parse(stored) : {};
+    seen[diveId] = new Date().toISOString();
+    // Mantener solo entradas de los últimos 7 días para no inflar localStorage
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const cleaned: Record<string, string> = {};
+    for (const [id, ts] of Object.entries(seen)) {
+      if (new Date(ts).getTime() > cutoff) cleaned[id] = ts;
+    }
+    localStorage.setItem(FEED_SEEN_KEY, JSON.stringify(cleaned));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Devuelve mapa id -> timestamp de publicaciones vistas. Solo entradas vistas hace < 7 días. */
+export function getFeedSeenTimestamps(): Record<string, string> {
+  try {
+    const stored = localStorage.getItem(FEED_SEEN_KEY);
+    const seen: Record<string, string> = stored ? JSON.parse(stored) : {};
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const out: Record<string, string> = {};
+    for (const [id, ts] of Object.entries(seen)) {
+      if (new Date(ts).getTime() > cutoff) out[id] = ts;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Filtra y ordena publicaciones del feed: oculta las vistas hace > 24h; prioridad a no vistas */
+export function filterAndSortFeedBySeen<T extends { id: string; created_at: string }>(
+  dives: T[],
+  seenTimestamps: Record<string, string>
+): T[] {
+  const now = Date.now();
+  const TWENTY_FOUR_H = 24 * 60 * 60 * 1000;
+
+  const visible = dives.filter((d) => {
+    const seenAt = seenTimestamps[d.id];
+    if (!seenAt) return true; // no vista → siempre visible
+    const elapsed = now - new Date(seenAt).getTime();
+    return elapsed < TWENTY_FOUR_H; // vista hace < 24h → visible
+  });
+
+  // Prioridad: no vistas primero, luego por fecha más reciente
+  return visible.sort((a, b) => {
+    const aSeen = !!seenTimestamps[a.id];
+    const bSeen = !!seenTimestamps[b.id];
+    if (!aSeen && bSeen) return -1;
+    if (aSeen && !bSeen) return 1;
+    return (b.created_at ?? '').localeCompare(a.created_at ?? '');
+  });
+}
+
 export function markStoriesAsSeen(diveIds: string[]): void {
   try {
     const today = new Date().toISOString().slice(0, 10);

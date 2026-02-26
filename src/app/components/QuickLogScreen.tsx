@@ -1,4 +1,10 @@
 import { MoonPhaseIcon } from '@/app/components/MoonPhaseIcon';
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from '@/app/components/ui/dropdown-menu';
 import { Input } from '@/app/components/ui/input';
 import {
     addFavoriteZone,
@@ -723,24 +729,33 @@ export function QuickLogScreen({ onNavigate }: QuickLogScreenProps) {
                         className="hidden"
                         onChange={(e) => onCaptureFileChange(row.id, item.id, e)}
                       />
-                      <button
-                        type="button"
-                        onClick={() => captureCameraRefs.current[`${row.id}-${item.id}`]?.click()}
-                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/10 text-cyan-300 text-xs border border-cyan-400/20 hover:bg-white/15"
-                        title="Foto desde cámara"
-                      >
-                        <Camera className="w-3.5 h-3.5" />
-                        Cámara
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => captureGalleryRefs.current[`${row.id}-${item.id}`]?.click()}
-                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/10 text-cyan-300 text-xs border border-cyan-400/20 hover:bg-white/15"
-                        title="Foto desde galería"
-                      >
-                        <ImageIcon className="w-3.5 h-3.5" />
-                        Galería
-                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/10 text-cyan-300 text-xs border border-cyan-400/20 hover:bg-white/15"
+                          >
+                            <ImageIcon className="w-3.5 h-3.5" />
+                            Foto
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="min-w-[160px] bg-[#0c1f3a] border-cyan-400/25">
+                          <DropdownMenuItem
+                            onClick={() => captureCameraRefs.current[`${row.id}-${item.id}`]?.click()}
+                            className="text-cyan-300 focus:bg-cyan-500/20 focus:text-cyan-200"
+                          >
+                            <Camera className="w-3.5 h-3.5 mr-2" />
+                            Cámara
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => captureGalleryRefs.current[`${row.id}-${item.id}`]?.click()}
+                            className="text-cyan-300 focus:bg-cyan-500/20 focus:text-cyan-200"
+                          >
+                            <ImageIcon className="w-3.5 h-3.5 mr-2" />
+                            Galería
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       <input
                         type="text"
                         inputMode="decimal"

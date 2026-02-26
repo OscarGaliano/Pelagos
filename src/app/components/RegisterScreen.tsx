@@ -11,6 +11,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/app/components/ui/select';
+import { SPANISH_CITIES } from '@/data/spanishCities';
 import { signInWithGoogle } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { ChevronLeft, ChevronRight, Mail } from 'lucide-react';
@@ -714,12 +715,25 @@ export function RegisterScreen({ onNavigate, onBack, connectionError, onRetryCon
                     <p className="text-cyan-300/80 text-xs">Dirección habitual (sin calle exacta → privacidad)</p>
                     <div className="grid gap-2">
                       <Label className="text-cyan-100">Ciudad</Label>
-                      <Input
-                        className="bg-white/10 border-cyan-400/30 text-white placeholder:text-white/50"
-                        placeholder="Ciudad"
-                        value={form.city}
-                        onChange={(e) => update('city', e.target.value)}
-                      />
+                      <Select
+                        value={form.city || '__ninguna__'}
+                        onValueChange={(v) => update('city', v === '__ninguna__' ? '' : v)}
+                      >
+                        <SelectTrigger className="bg-white/10 border-cyan-400/30 text-white">
+                          <SelectValue placeholder="Elige una ciudad española" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-[#0c1f3a] border-cyan-400/20 max-h-[240px]">
+                          <SelectItem value="__ninguna__" className="text-cyan-300/70">
+                            — Seleccionar —
+                          </SelectItem>
+                          {SPANISH_CITIES.map((c) => (
+                            <SelectItem key={c} value={c} className="text-cyan-100 focus:bg-cyan-500/20">
+                              {c}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-cyan-300/60 text-xs">Solo ciudades españolas (información para PescaSub).</p>
                     </div>
                     <div className="grid gap-2">
                       <Label className="text-cyan-100">Código postal</Label>

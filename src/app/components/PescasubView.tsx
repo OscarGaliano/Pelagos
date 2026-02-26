@@ -6,9 +6,10 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/app/components/ui/select';
+import { SPANISH_CITIES } from '@/data/spanishCities';
 import { formatFishingModalities, getProfilesForPescasub } from '@/lib/api/profiles';
 import { getStoriesFeed, getUserSharedDives, type SharedDive, type StoriesByUser } from '@/lib/api/sharedDives';
-import { extractCityFromLocation, normalizeCity, uniqueCitiesByNormalized } from '@/lib/cityUtils';
+import { extractCityFromLocation, normalizeCity } from '@/lib/cityUtils';
 import { supabase } from '@/lib/supabase';
 import { ArrowLeft, Calendar, Heart, Loader2, MapPin, MessageCircle, User } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -111,11 +112,8 @@ export function PescasubView({ onBack, onNavigate }: PescasubViewProps) {
     } catch { /* ignore */ }
   }, [loading, profiles, openProfile]);
 
-  // Ciudades únicas por nombre normalizado (Málaga/Malaga → una sola opción)
-  const cities = useMemo(() => {
-    const locs = profiles.map((p) => p.location);
-    return uniqueCitiesByNormalized(locs).sort((a, b) => a.display.localeCompare(b.display));
-  }, [profiles]);
+  // Solo ciudades españolas (Canarias, Baleares, Ceuta, Melilla incluidas)
+  const cities = useMemo(() => [...SPANISH_CITIES], []);
 
   const filtered = useMemo(() => {
     if (!filterCity) return profiles;
@@ -173,11 +171,11 @@ export function PescasubView({ onBack, onNavigate }: PescasubViewProps) {
                 </SelectItem>
                 {cities.map((city) => (
                   <SelectItem
-                    key={city.normalized}
-                    value={city.display}
+                    key={city}
+                    value={city}
                     className="text-cyan-100 focus:bg-cyan-500/20"
                   >
-                    {city.display}
+                    {city}
                   </SelectItem>
                 ))}
               </SelectContent>

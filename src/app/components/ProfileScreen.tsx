@@ -19,10 +19,11 @@ import {
 } from '@/app/components/ui/select';
 import { Switch } from '@/app/components/ui/switch';
 import { getDives } from '@/lib/api/dives';
-import { deleteAccount, ensureProfile, formatFishingModalities, getDistinctLocations, getProfile, updateProfile, uploadAvatar } from '@/lib/api/profiles';
+import { deleteAccount, ensureProfile, formatFishingModalities, getProfile, updateProfile, uploadAvatar } from '@/lib/api/profiles';
 import { getStoriesFeed, type StoriesByUser } from '@/lib/api/sharedDives';
-import { extractCityFromLocation } from '@/lib/cityUtils';
+import { extractCityFromLocation, parseLocationToCityAndLocality } from '@/lib/cityUtils';
 import { supabase } from '@/lib/supabase';
+import { SPANISH_CITIES } from '@/data/spanishCities';
 import type { Dive, Profile } from '@/lib/types';
 import type { User } from '@supabase/supabase-js';
 import { Award, Calendar, Camera, ChevronLeft, Fish, MapPin, Pencil, Phone, Shield, Trash2, User as UserIcon } from 'lucide-react';
@@ -48,6 +49,7 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
   const [saving, setSaving] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [recentDives, setRecentDives] = useState<Dive[]>([]);
+  const [allDives, setAllDives] = useState<Dive[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Formulario de edición (valores actuales)
@@ -57,11 +59,11 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
   const [editShareLocation, setEditShareLocation] = useState(true);
   const [editExperienceLevel, setEditExperienceLevel] = useState('principiante');
   const [editPhone, setEditPhone] = useState('');
-  const [editLocation, setEditLocation] = useState('');
+  const [editCity, setEditCity] = useState('');
+  const [editLocality, setEditLocality] = useState('');
   const [editFishingInfantry, setEditFishingInfantry] = useState(true);
   const [editFishingBoat, setEditFishingBoat] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [locationSuggestions, setLocationSuggestions] = useState<string[]>([]);
   const [myStories, setMyStories] = useState<StoriesByUser[]>([]);
   const [storiesLoading, setStoriesLoading] = useState(false);
   const [storyViewerOpen, setStoryViewerOpen] = useState(false);
@@ -75,13 +77,16 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
       try {
         const [p, dives] = await Promise.all([getProfile(u.id), getDives(u.id)]);
         setProfile(p ?? null);
+        setAllDives(dives);
         setRecentDives(dives.slice(0, 5));
       } catch {
         setProfile(null);
+        setAllDives([]);
         setRecentDives([]);
       }
     } else {
       setProfile(null);
+      setAllDives([]);
       setRecentDives([]);
     }
     setLoading(false);
@@ -124,11 +129,12 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
     setEditShareLocation(profile?.share_location ?? true);
     setEditExperienceLevel(profile?.experience_level ?? 'principiante');
     setEditPhone(profile?.phone ?? '');
-    setEditLocation(profile?.location ?? '');
+    const { city, locality } = parseLocationToCityAndLocality(profile?.location);
+    setEditCity(city);
+    setEditLocality(locality);
     setEditFishingInfantry(profile?.fishing_infantry ?? true);
     setEditFishingBoat(profile?.fishing_boat ?? false);
     setEditing(true);
-    getDistinctLocations().then(setLocationSuggestions).catch(() => setLocationSuggestions([]));
   };
 
   const saveProfile = async () => {
@@ -143,7 +149,9 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
         share_location: editShareLocation,
         experience_level: editExperienceLevel,
         phone: editPhone.trim() || null,
-        location: editLocation.trim() || null,
+        location: editLocality.trim()
+          ? `${editLocality.trim()}, ${editCity.trim()}`
+          : editCity.trim() || null,
         fishing_infantry: editFishingInfantry,
         fishing_boat: editFishingBoat,
       });
@@ -336,12 +344,12 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
         <div className="grid grid-cols-3 gap-3">
           <div className="backdrop-blur-xl bg-white/5 rounded-2xl p-4 border border-cyan-400/20">
             <Calendar className="w-5 h-5 text-cyan-400 mb-2" />
-            <p className="text-white text-xl font-bold">0</p>
+            <p className="text-white text-xl font-bold">{allDives.length}</p>
             <p className="text-cyan-300/70 text-xs">Jornadas</p>
           </div>
           <div className="backdrop-blur-xl bg-white/5 rounded-2xl p-4 border border-cyan-400/20">
             <Fish className="w-5 h-5 text-cyan-400 mb-2" />
-            <p className="text-white text-xl font-bold">0</p>
+            <p className="text-white text-xl font-bold">{allDives.reduce((sum, d) => sum + (d.catches?.length ?? 0), 0)}</p>
             <p className="text-cyan-300/70 text-xs">Capturas</p>
           </div>
           <div className="backdrop-blur-xl bg-white/5 rounded-2xl p-4 border border-cyan-400/20">
@@ -376,12 +384,24 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
                 <span className="text-white">{profile.phone}</span>
               </div>
             )}
-            {(profile?.location && extractCityFromLocation(profile.location)) ? (
-              <div className="flex justify-between text-sm items-center gap-2">
-                <span className="text-cyan-300/70 flex items-center gap-1"><MapPin className="w-4 h-4" /> Ciudad</span>
-                <span className="text-white">{extractCityFromLocation(profile.location)}</span>
-              </div>
-            ) : null}
+            {profile?.location && (() => {
+              const { city, locality } = parseLocationToCityAndLocality(profile.location);
+              if (!city) return null;
+              return (
+                <>
+                  {locality ? (
+                    <div className="flex justify-between text-sm items-center gap-2">
+                      <span className="text-cyan-300/70 flex items-center gap-1"><MapPin className="w-4 h-4" /> Localidad</span>
+                      <span className="text-white">{locality}</span>
+                    </div>
+                  ) : null}
+                  <div className="flex justify-between text-sm items-center gap-2">
+                    <span className="text-cyan-300/70 flex items-center gap-1"><MapPin className="w-4 h-4" /> Ciudad</span>
+                    <span className="text-white">{city}</span>
+                  </div>
+                </>
+              );
+            })()}
             {profile?.emergency_contact && (
               <div className="flex justify-between text-sm">
                 <span className="text-cyan-300/70">Contacto emergencia</span>
@@ -614,19 +634,35 @@ export function ProfileScreen({ onNavigate }: ProfileScreenProps) {
             </div>
             <div className="grid gap-2">
               <Label className="text-cyan-100">Ciudad</Label>
+              <Select
+                value={editCity || '__ninguna__'}
+                onValueChange={(v) => setEditCity(v === '__ninguna__' ? '' : v)}
+              >
+                <SelectTrigger className="bg-white/10 border-cyan-400/30 text-white">
+                  <SelectValue placeholder="Elige una ciudad española" />
+                </SelectTrigger>
+                <SelectContent className="bg-[#0c1f3a] border-cyan-400/20 max-h-[240px]">
+                  <SelectItem value="__ninguna__" className="text-cyan-300/70">
+                    — Seleccionar —
+                  </SelectItem>
+                  {SPANISH_CITIES.map((c) => (
+                    <SelectItem key={c} value={c} className="text-cyan-100 focus:bg-cyan-500/20">
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-cyan-300/60 text-xs">Solo ciudades españolas (información para PescaSub).</p>
+            </div>
+            <div className="grid gap-2">
+              <Label className="text-cyan-100">Localidad (opcional)</Label>
               <Input
                 className="bg-white/10 border-cyan-400/30 text-white placeholder:text-white/50"
-                value={editLocation}
-                onChange={(e) => setEditLocation(e.target.value)}
-                placeholder="Ej. Málaga"
-                list="profile-location-list"
+                value={editLocality}
+                onChange={(e) => setEditLocality(e.target.value)}
+                placeholder="Ej. Coín, Torremolinos"
               />
-              <datalist id="profile-location-list">
-                {locationSuggestions.map((loc) => (
-                  <option key={loc} value={loc} />
-                ))}
-              </datalist>
-              <p className="text-cyan-300/60 text-xs">Coincidencias con las ciudades existentes; solo hay una opción por ciudad (con o sin tilde).</p>
+              <p className="text-cyan-300/60 text-xs">Pueblo o barrio. En PescaSub solo se mostrará la ciudad.</p>
             </div>
             <div className="grid gap-2">
               <Label className="text-cyan-100">Nivel de experiencia</Label>

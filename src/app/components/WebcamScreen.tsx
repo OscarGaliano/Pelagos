@@ -1,5 +1,5 @@
-import { ChevronLeft, ChevronRight, ExternalLink, MapPin, Video } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
+import { ChevronLeft, ExternalLink, MapPin, Video } from 'lucide-react';
+import { motion } from 'motion/react';
 import { useMemo, useState } from 'react';
 import type { WebcamItem, WebcamProvider } from '../../data';
 import { WEBCAM_PROVIDERS } from '../../data';
@@ -13,7 +13,6 @@ interface WebcamScreenProps {
 export function WebcamScreen({ onNavigate }: WebcamScreenProps) {
   const [providerId, setProviderId] = useState<WebcamProvider['id']>('hispacams');
   const [selectedCity, setSelectedCity] = useState<string>(ALL_CITIES);
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
 
   const provider = WEBCAM_PROVIDERS.find((p) => p.id === providerId) ?? WEBCAM_PROVIDERS[0];
   const items = provider.items;
@@ -28,34 +27,19 @@ export function WebcamScreen({ onNavigate }: WebcamScreenProps) {
     return items.filter((i) => i.city === selectedCity);
   }, [items, selectedCity]);
 
-  const selected = selectedIndex !== null ? filteredItems[selectedIndex] : null;
   const total = filteredItems.length;
-
-  const goPrev = () => {
-    if (selectedIndex === null) return;
-    setSelectedIndex(selectedIndex <= 0 ? total - 1 : selectedIndex - 1);
-  };
-
-  const goNext = () => {
-    if (selectedIndex === null) return;
-    setSelectedIndex(selectedIndex >= total - 1 ? 0 : selectedIndex + 1);
-  };
 
   const openExternal = (url: string) => {
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  const openProvider = providerId === 'hispacams' ? 'Hispacams' : providerId === 'skylinewebcams' ? 'Skylinewebcams' : 'LiveCamworld';
-
   const onProviderChange = (id: WebcamProvider['id']) => {
     setProviderId(id);
     setSelectedCity(ALL_CITIES);
-    setSelectedIndex(null);
   };
 
   const onCityChange = (city: string) => {
     setSelectedCity(city);
-    setSelectedIndex(null);
   };
 
   return (
@@ -65,7 +49,7 @@ export function WebcamScreen({ onNavigate }: WebcamScreenProps) {
         <div className="px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
             <motion.button
-              onClick={() => (selected !== null ? setSelectedIndex(null) : onNavigate('home'))}
+              onClick={() => onNavigate('home')}
               whileTap={{ scale: 0.9 }}
               className="p-2 rounded-full hover:bg-white/10 active:bg-white/15 flex-shrink-0"
             >
@@ -74,23 +58,14 @@ export function WebcamScreen({ onNavigate }: WebcamScreenProps) {
             <div className="min-w-0">
               <h1 className="text-white text-xl sm:text-2xl truncate">Webcams</h1>
               <p className="text-cyan-300 text-xs sm:text-sm">
-                {selected ? selected.title : `${total} playas · ${provider.name}`}
+                {total} playas · {provider.name}
               </p>
             </div>
           </div>
         </div>
       </div>
 
-      <AnimatePresence mode="wait">
-        {selected === null ? (
-          /* Listado: selector de proveedor + grid de playas */
-          <motion.div
-            key="list"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="px-4 sm:px-6 py-4 pb-8"
-          >
+      <div className="px-4 sm:px-6 py-4 pb-8">
             {/* Tabs proveedor */}
             <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
               {WEBCAM_PROVIDERS.map((p) => (
@@ -142,100 +117,26 @@ export function WebcamScreen({ onNavigate }: WebcamScreenProps) {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredItems.map((item, index) => (
+              {filteredItems.map((item) => (
                 <BeachCard
                   key={`${provider.id}-${item.id}`}
                   item={item}
-                  providerName={provider.name}
-                  onSelect={() => setSelectedIndex(index)}
+                  onSelect={() => openExternal(item.url)}
                   onOpenExternal={() => openExternal(item.url)}
                 />
               ))}
             </div>
-          </motion.div>
-        ) : (
-          /* Vista cámara: iframe + navegación */
-          <motion.div
-            key="player"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="flex flex-col h-[calc(100vh-4.5rem)] px-4 sm:px-6 py-4"
-          >
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <div className="min-w-0 flex-1">
-                <h2 className="text-white font-medium truncate">{selected.title}</h2>
-                <div className="flex items-center gap-1.5 text-cyan-300/80 text-sm">
-                  <MapPin className="w-4 h-4 flex-shrink-0" />
-                  <span className="truncate">{selected.location}</span>
-                </div>
-              </div>
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <motion.button
-                  onClick={goPrev}
-                  whileTap={{ scale: 0.95 }}
-                  className="p-2 rounded-full bg-white/10 text-cyan-400 hover:bg-cyan-500/20"
-                  aria-label="Playa anterior"
-                >
-                  <ChevronLeft className="w-5 h-5" />
-                </motion.button>
-                <span className="text-cyan-300/80 text-sm tabular-nums min-w-[3ch] text-center">
-                  {selectedIndex! + 1}/{total}
-                </span>
-                <motion.button
-                  onClick={goNext}
-                  whileTap={{ scale: 0.95 }}
-                  className="p-2 rounded-full bg-white/10 text-cyan-400 hover:bg-cyan-500/20"
-                  aria-label="Siguiente playa"
-                >
-                  <ChevronRight className="w-5 h-5" />
-                </motion.button>
-              </div>
-            </div>
-
-            <div className="flex-1 min-h-0 rounded-2xl overflow-hidden border border-cyan-400/20 bg-black/40">
-              <iframe
-                title={`Webcam ${selected.title} - ${openProvider}`}
-                src={selected.url}
-                className="w-full h-full min-h-[240px]"
-                allow="fullscreen"
-                referrerPolicy="no-referrer"
-                sandbox="allow-scripts allow-same-origin allow-popups"
-              />
-            </div>
-
-            <div className="flex gap-2 mt-3">
-              <motion.button
-                onClick={() => setSelectedIndex(null)}
-                whileTap={{ scale: 0.98 }}
-                className="flex-1 py-3 rounded-xl border border-cyan-400/30 bg-cyan-500/10 text-cyan-300 font-medium text-sm"
-              >
-                Volver al listado
-              </motion.button>
-              <motion.button
-                onClick={() => openExternal(selected.url)}
-                whileTap={{ scale: 0.98 }}
-                className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-cyan-400/30 bg-cyan-500/20 text-cyan-300 font-medium text-sm"
-              >
-                <ExternalLink className="w-4 h-4" />
-                <span className="hidden sm:inline">Abrir en {openProvider}</span>
-              </motion.button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          </div>
     </div>
   );
 }
 
 function BeachCard({
   item,
-  providerName,
   onSelect,
   onOpenExternal,
 }: {
   item: WebcamItem;
-  providerName: string;
   onSelect: () => void;
   onOpenExternal: (e: React.MouseEvent) => void;
 }) {
@@ -288,8 +189,8 @@ function BeachCard({
           whileTap={{ scale: 0.95 }}
           className="w-full py-2 rounded-xl border border-cyan-400/25 text-cyan-400/90 text-xs font-medium flex items-center justify-center gap-2"
         >
-          <ExternalLink className="w-4 h-4" />
-          Abrir en {providerName}
+          <ExternalLink className="w-4 h-4 shrink-0" />
+          Abrir
         </motion.button>
       </div>
     </motion.article>

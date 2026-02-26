@@ -3,8 +3,11 @@ import { getNovedadesQuedadas } from '@/lib/api/quedadas';
 import {
   addComment,
   deleteComment,
+  filterAndSortFeedBySeen,
   getComments,
   getAllSharedDives,
+  getFeedSeenTimestamps,
+  markFeedPublicationAsSeen,
   toggleLike,
   type SharedDive,
   type SharedDiveComment,
@@ -14,7 +17,7 @@ import type { Quedada } from '@/lib/types';
 import { ensureAbsoluteUrl, ensureAbsoluteUrls } from '@/lib/urlUtils';
 import { Activity, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Eye, EyeOff, Heart, Loader2, MapPin, MessageCircle, Newspaper, Share2, Shield, Users, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Slider from 'react-slick';
 import 'slick-carousel/slick/slick-theme.css';
 import 'slick-carousel/slick/slick.css';
@@ -65,6 +68,8 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
   const [selectedDiveForComments, setSelectedDiveForComments] = useState<SharedDive | null>(null);
   const [shareMenuDiveId, setShareMenuDiveId] = useState<string | null>(null);
   const [likingId, setLikingId] = useState<string | null>(null);
+  const [feedSeenVersion, setFeedSeenVersion] = useState(0); // incrementar al marcar como vista → re-filtrar
+  const feedContainerRef = useRef<HTMLDivElement>(null);
   const [news, setNews] = useState<News[]>([]);
   const [newsLoading, setNewsLoading] = useState(true);
   const [customSections, setCustomSections] = useState<HomeSection[]>([]);
@@ -187,6 +192,37 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  const feedSeenTimestamps = useMemo(() => getFeedSeenTimestamps(), [feedSeenVersion]);
+  const filteredFeed = useMemo(
+    () => filterAndSortFeedBySeen(feedDives, feedSeenTimestamps),
+    [feedDives, feedSeenTimestamps]
+  );
+
+  const markDiveAsSeenIfNeeded = useCallback((diveId: string) => {
+    if (feedSeenTimestamps[diveId]) return;
+    markFeedPublicationAsSeen(diveId);
+    setFeedSeenVersion((v) => v + 1);
+  }, [feedSeenTimestamps]);
+
+  useEffect(() => {
+    const container = feedContainerRef.current;
+    if (!container) return;
+    const cards = container.querySelectorAll('[data-feed-dive]');
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            const id = (e.target as HTMLElement).dataset.feedDive;
+            if (id) markDiveAsSeenIfNeeded(id);
+          }
+        }
+      },
+      { root: null, rootMargin: '0px', threshold: 0.3 }
+    );
+    cards.forEach((c) => observer.observe(c));
+    return () => observer.disconnect();
+  }, [filteredFeed, markDiveAsSeenIfNeeded]);
 
   const openNovedad = (q: Quedada) => {
     try {
@@ -337,13 +373,14 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
                 {/* Feed de publicaciones (estilo Instagram): me gusta y comentarios. El botón + del header lleva a Compartir jornada. */}
                 {feedLoading ? (
                   <div className={`h-24 flex items-center justify-center text-sm ${isDark ? 'text-cyan-400/80' : 'text-slate-500'}`}>Cargando…</div>
-                ) : feedDives.length === 0 ? (
+                ) : filteredFeed.length === 0 ? (
                   <p className={`px-3 pb-4 text-sm ${isDark ? 'text-cyan-400/60' : 'text-slate-500'}`}>Aún no hay publicaciones. Comparte tu primera jornada.</p>
                 ) : (
-                  <div className="px-3 pb-4 space-y-4">
-                    {feedDives.map((dive) => (
+                  <div ref={feedContainerRef} className="px-3 pb-4 space-y-4">
+                    {filteredFeed.map((dive) => (
                       <motion.div
                         key={dive.id}
+                        data-feed-dive={dive.id}
                         layout
                         className={`rounded-xl border overflow-hidden ${
                           isDark ? 'border-cyan-400/20 bg-white/5' : 'border-slate-300 bg-slate-50'
@@ -400,7 +437,7 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
                           </button>
                           <button
                             type="button"
-                            onClick={(e) => { e.stopPropagation(); setSelectedDiveForComments(dive); }}
+                            onClick={(e) => { e.stopPropagation(); markDiveAsSeenIfNeeded(dive.id); setSelectedDiveForComments(dive); }}
                             className={`flex items-center gap-1.5 text-sm ${isDark ? 'text-cyan-300/80 hover:text-cyan-300' : 'text-slate-600 hover:text-slate-800'}`}
                           >
                             <MessageCircle className="w-4 h-4" />

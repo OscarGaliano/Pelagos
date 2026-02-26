@@ -27,10 +27,14 @@ import {
     updateDive,
 } from '@/lib/api/dives';
 import { supabase } from '@/lib/supabase';
+import type { DiveWithSpot } from '@/lib/api/dives';
 import type { Dive } from '@/lib/types';
-import { ChevronLeft, Fish, Pencil, Trash2, Waves, Wind } from 'lucide-react';
+import { formatPeriodRange, getMoonPhase, getMoonPhaseLabel, getSolunarPeriods } from '@/lib/solunar';
+import { ensureAbsoluteUrl } from '@/lib/urlUtils';
+import { MoonPhaseIcon } from '@/app/components/MoonPhaseIcon';
+import { BarChart2, Calendar, ChevronLeft, ChevronRight, ChevronUp, Fish, MapPin, Pencil, Trash2, Waves, Wind } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 const ESPECIES_FIJAS = ['Dorada', 'Lubina', 'Sargo', 'Mero', 'Dentón', 'Limón'] as const;
 
@@ -96,12 +100,239 @@ function countsAndOtrasToSpeciesList(
   return list;
 }
 
+interface DiveDetailWindowProps {
+  dive: DiveWithSpot;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onImageView: (url: string) => void;
+}
+
+function DiveDetailWindow({ dive, onClose, onEdit, onDelete, onImageView }: DiveDetailWindowProps) {
+  const d = dive as DiveWithSpot;
+  const spot = d.dive_spot ?? d.dive_spots;
+  const city = spot?.city ?? null;
+  const locality = dive.location_name ?? null;
+  const lat = spot?.lat ?? 39.5;
+  const lon = spot?.lng ?? 2.5;
+  const solunarPeriods = getSolunarPeriods(dive.dive_date, lat, lon);
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="bg-[#0c1f3a] border-cyan-400/20 text-white max-w-2xl w-[calc(100%-2rem)] max-h-[90vh] overflow-hidden p-0 flex flex-col">
+        <div className="sticky top-0 z-10 backdrop-blur-xl bg-[#0c1f3a]/95 border-b border-cyan-400/20 px-4 py-3 pr-14 flex items-center justify-between">
+          <h2 className="text-white font-semibold text-lg">Detalle de jornada</h2>
+        </div>
+        <div className="px-4 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-cyan-400 shrink-0" />
+            <div>
+              <p className="text-cyan-300/70 text-xs">Fecha</p>
+              <p className="text-white font-medium">{new Date(dive.dive_date + 'T12:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
+            </div>
+          </div>
+          {(city || locality) && (
+            <div className="flex items-center gap-2">
+              <MapPin className="w-4 h-4 text-cyan-400 shrink-0" />
+              <div>
+                <p className="text-cyan-300/70 text-xs">Ubicación</p>
+                <p className="text-white font-medium">{[city, locality].filter(Boolean).join(' · ')}</p>
+              </div>
+            </div>
+          )}
+          {spot?.name && (
+            <div className="flex items-center gap-2">
+              <MapPin className="w-4 h-4 text-cyan-400 shrink-0" />
+              <div>
+                <p className="text-cyan-300/70 text-xs">Escenario de pesca</p>
+                <p className="text-white font-medium">{spot.name}</p>
+              </div>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-cyan-300/70 text-xs">Duración</p>
+              <p className="text-white font-medium">{formatDuration(dive.duration_minutes)}</p>
+            </div>
+            {((dive as { min_depth_m?: number | null }).min_depth_m != null || dive.max_depth_m != null) && (
+              <div>
+                <p className="text-cyan-300/70 text-xs">Profundidad</p>
+                <p className="text-white font-medium">
+                  {(dive as { min_depth_m?: number | null }).min_depth_m != null && dive.max_depth_m != null
+                    ? `${(dive as { min_depth_m?: number }).min_depth_m}–${dive.max_depth_m} m`
+                    : (dive as { min_depth_m?: number | null }).min_depth_m != null
+                      ? `${(dive as { min_depth_m: number }).min_depth_m} m (desde)`
+                      : `${dive.max_depth_m} m (hasta)`}
+                </p>
+              </div>
+            )}
+            {dive.temperature_c != null && (
+              <div>
+                <p className="text-cyan-300/70 text-xs">Temperatura</p>
+                <p className="text-white font-medium">{dive.temperature_c} °C</p>
+              </div>
+            )}
+            {dive.gps_lat != null && dive.gps_lng != null && (
+              <div className="col-span-2">
+                <p className="text-cyan-300/70 text-xs">Coordenadas GPS</p>
+                <p className="text-white text-sm">{dive.gps_lat.toFixed(5)}, {dive.gps_lng.toFixed(5)}</p>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(dive as { current_type?: string | null }).current_type && (
+              <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-white/5">
+                <Waves className="w-4 h-4 text-cyan-400" />
+                <span className="text-cyan-200 text-sm capitalize">{(dive as { current_type: string }).current_type}</span>
+              </div>
+            )}
+            {dive.wind_speed_kmh != null && (
+              <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-white/5">
+                <Wind className="w-4 h-4 text-cyan-400" />
+                <span className="text-cyan-200 text-sm">{dive.wind_speed_kmh} km/h{dive.wind_direction ? ` ${dive.wind_direction}` : ''}</span>
+              </div>
+            )}
+            {dive.tide_coefficient != null && (
+              <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-white/5">
+                <Waves className="w-4 h-4 text-cyan-400" />
+                <span className="text-cyan-200 text-sm">Coef. marea {dive.tide_coefficient}</span>
+              </div>
+            )}
+            {dive.wave_height_m != null && (
+              <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-white/5">
+                <Waves className="w-4 h-4 text-cyan-400" />
+                <span className="text-cyan-200 text-sm">{dive.wave_height_m.toFixed(1)} m oleaje</span>
+              </div>
+            )}
+          </div>
+          {dive.notes?.trim() && (
+            <div>
+              <p className="text-cyan-300/70 text-xs mb-1">Notas</p>
+              <p className="text-cyan-200 text-sm">{dive.notes}</p>
+            </div>
+          )}
+          {dive.catches && dive.catches.length > 0 && (
+            <div>
+              <p className="text-cyan-300/70 text-xs mb-2 flex items-center gap-1">
+                <Fish className="w-3.5 h-3.5" /> Capturas
+              </p>
+              <div className="space-y-3">
+                {dive.catches.map((c) => (
+                  <div key={c.id} className="flex gap-3 p-3 rounded-xl bg-white/5 border border-cyan-400/10">
+                    {c.image_url ? (
+                      <button
+                        type="button"
+                        onClick={() => onImageView(ensureAbsoluteUrl(c.image_url!))}
+                        className="shrink-0 rounded-lg border border-cyan-400/20 overflow-hidden focus:ring-2 focus:ring-cyan-400/50"
+                      >
+                        <img
+                          src={ensureAbsoluteUrl(c.image_url)}
+                          alt={c.species}
+                          className="w-16 h-16 object-cover block cursor-pointer hover:opacity-90 transition-opacity"
+                        />
+                      </button>
+                    ) : (
+                      <div className="w-16 h-16 rounded-lg border border-cyan-400/20 bg-white/5 flex items-center justify-center shrink-0">
+                        <Fish className="w-6 h-6 text-cyan-400/50" />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-white font-medium">{c.species}</p>
+                      <div className="flex flex-wrap gap-2 mt-1 text-cyan-300/80 text-xs">
+                        {c.weight_kg != null && <span>{c.weight_kg} kg</span>}
+                        {c.length_cm != null && <span>{c.length_cm} cm</span>}
+                        {!c.weight_kg && !c.length_cm && <span className="text-cyan-400/60">—</span>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {solunarPeriods.length > 0 && (
+            <div className="pt-4 border-t border-cyan-400/20">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="shrink-0 rounded-full bg-white/5 p-0.5 border border-cyan-400/20">
+                  <MoonPhaseIcon phase={getMoonPhase(dive.dive_date)} size={48} className="block" />
+                </div>
+                <div>
+                  <p className="text-cyan-300/80 text-xs">Tabla solunar ({dive.dive_date})</p>
+                  <p className="text-cyan-200/90 text-xs font-medium">{getMoonPhaseLabel(dive.dive_date)}</p>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-cyan-300/80 border-b border-cyan-400/20">
+                      <th className="text-left py-2 pr-3 font-medium">Tipo</th>
+                      <th className="text-left py-2 font-medium">Franja</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {solunarPeriods.map((p, i) => (
+                      <tr key={i} className="border-b border-cyan-400/10 last:border-0">
+                        <td className="py-2 pr-3 text-white">{p.label}</td>
+                        <td className="py-2 text-cyan-200 tabular-nums">{formatPeriodRange(p.start, p.end)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          <div className="flex gap-2 pt-2">
+            <motion.button
+              onClick={onEdit}
+              whileTap={{ scale: 0.98 }}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-500/30 text-cyan-200 border border-cyan-400/30 text-sm"
+            >
+              <Pencil className="w-4 h-4" /> Editar
+            </motion.button>
+            <motion.button
+              onClick={onDelete}
+              whileTap={{ scale: 0.98 }}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/30 text-red-200 border border-red-400/30 text-sm"
+            >
+              <Trash2 className="w-4 h-4" /> Eliminar
+            </motion.button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function DiveLogScreen({ onNavigate }: DiveLogScreenProps) {
-  const [dives, setDives] = useState<Dive[]>([]);
+  const [dives, setDives] = useState<DiveWithSpot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [editingDive, setEditingDive] = useState<Dive | null>(null);
+  const [imageViewerUrl, setImageViewerUrl] = useState<string | null>(null);
+  const [detailDive, setDetailDive] = useState<DiveWithSpot | null>(null);
+  const [showCoincidencias, setShowCoincidencias] = useState(false);
+  const [editingDive, setEditingDive] = useState<DiveWithSpot | null>(null);
+
+  /** Agregado por especie: total capturas, nº de jornadas donde aparece */
+  const coincidencias = useMemo(() => {
+    const bySpecies = new Map<string, { total: number; diveIds: Set<string> }>();
+    for (const dive of dives) {
+      for (const c of dive.catches ?? []) {
+        const s = c.species?.trim();
+        if (!s) continue;
+        const curr = bySpecies.get(s) ?? { total: 0, diveIds: new Set<string>() };
+        curr.total++;
+        curr.diveIds.add(dive.id);
+        bySpecies.set(s, curr);
+      }
+    }
+    return Array.from(bySpecies.entries())
+      .map(([species, { total, diveIds }]) => ({
+        species,
+        totalCount: total,
+        jornadasCount: diveIds.size,
+      }))
+      .sort((a, b) => b.totalCount - a.totalCount);
+  }, [dives]);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -234,89 +465,142 @@ export function DiveLogScreen({ onNavigate }: DiveLogScreenProps) {
             </motion.button>
           </div>
         ) : (
-          <div className="relative">
-            <div className="absolute left-[23px] top-0 bottom-0 w-0.5 bg-gradient-to-b from-cyan-500 via-blue-600 to-transparent" />
-            <div className="space-y-6">
-              {dives.map((dive, index) => (
-                <motion.div
-                  key={dive.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.3, delay: index * 0.05 }}
-                  className="relative"
+          <div className="space-y-8">
+            {/* Coincidencias entre capturas — cuadro apartado */}
+            {coincidencias.length > 0 && (
+              <div className="backdrop-blur-xl rounded-2xl border-2 border-amber-400/30 overflow-hidden bg-gradient-to-br from-amber-500/10 to-orange-500/10">
+                <button
+                  type="button"
+                  onClick={() => setShowCoincidencias(!showCoincidencias)}
+                  className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left"
                 >
-                  <div className="absolute left-0 top-6 w-12 h-12 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/50">
-                    <Waves className="w-6 h-6 text-white" />
+                  <div className="flex items-center gap-2">
+                    <BarChart2 className="w-5 h-5 text-amber-400" />
+                    <span className="text-white font-medium">Coincidencias entre capturas</span>
                   </div>
-                  <div
-                    className={`ml-20 backdrop-blur-xl rounded-2xl p-5 border shadow-xl cursor-pointer transition-colors ${
-                      selectedIds.has(dive.id)
-                        ? 'bg-cyan-500/20 border-cyan-400/50'
-                        : 'bg-gradient-to-br from-cyan-500/10 to-blue-600/10 border-cyan-400/20'
-                    }`}
-                    onClick={() => toggleSelect(dive.id)}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div
-                        className="shrink-0 w-6 h-6 rounded border-2 border-cyan-400 flex items-center justify-center mt-0.5"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleSelect(dive.id);
-                        }}
-                      >
-                        {selectedIds.has(dive.id) && (
-                          <div className="w-3 h-3 rounded-sm bg-cyan-400" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between mb-3">
-                          <div>
-                            <h3 className="text-white text-lg">{dive.location_name || 'Sin zona'}</h3>
-                            <p className="text-cyan-300 text-sm">{formatDate(dive.dive_date)}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-white text-xl">{formatDuration(dive.duration_minutes)}</p>
-                            <p className="text-cyan-300/70 text-xs">Duración</p>
+                  <ChevronUp
+                    className={`w-5 h-5 text-amber-400 transition-transform shrink-0 ${showCoincidencias ? '' : 'rotate-180'}`}
+                  />
+                </button>
+                {showCoincidencias && (
+                  <div className="border-t border-amber-400/20 px-4 py-4">
+                    <p className="text-amber-200/80 text-xs mb-3">
+                      Especies capturadas a lo largo de tus jornadas
+                    </p>
+                    <div className="space-y-2">
+                      {coincidencias.map((c) => (
+                        <div
+                          key={c.species}
+                          className="flex items-center justify-between py-2 px-3 rounded-xl bg-white/5 border border-amber-400/20"
+                        >
+                          <span className="text-white font-medium">{c.species}</span>
+                          <div className="flex items-center gap-4 text-sm">
+                            <span className="text-amber-200/90">
+                              {c.totalCount} captura{c.totalCount !== 1 ? 's' : ''}
+                            </span>
+                            <span className="text-amber-400/90">
+                              en {c.jornadasCount} jornada{c.jornadasCount !== 1 ? 's' : ''}
+                            </span>
                           </div>
                         </div>
-                        <div className="flex flex-wrap gap-3 mb-3">
-                          {dive.tide_coefficient != null && (
-                            <div className="flex items-center gap-2">
-                              <Waves className="w-4 h-4 text-cyan-400" />
-                              <span className="text-cyan-200 text-sm">Coef. {dive.tide_coefficient}</span>
-                            </div>
-                          )}
-                          {dive.wind_speed_kmh != null && (
-                            <div className="flex items-center gap-2">
-                              <Wind className="w-4 h-4 text-cyan-400" />
-                              <span className="text-cyan-200 text-sm">{dive.wind_speed_kmh} km/h{dive.wind_direction ? ` ${dive.wind_direction}` : ''}</span>
-                            </div>
-                          )}
-                          {dive.wave_height_m != null && (
-                            <div className="flex items-center gap-2">
-                              <Waves className="w-4 h-4 text-cyan-400" />
-                              <span className="text-cyan-200 text-sm">{dive.wave_height_m.toFixed(1)} m oleaje</span>
-                            </div>
-                          )}
-                        </div>
-                        <div className="pt-3 border-t border-cyan-400/20">
-                          <p className="text-xs text-cyan-300/70 mb-1 flex items-center gap-1">
-                            <Fish className="w-3.5 h-3.5" /> Capturas
-                          </p>
-                          <p className="text-white text-sm">{formatCatches(dive)}</p>
-                        </div>
-                        {dive.notes?.trim() && (
-                          <p className="text-cyan-300/70 text-xs mt-2 pt-2 border-t border-cyan-400/10">{dive.notes}</p>
-                        )}
-                      </div>
+                      ))}
                     </div>
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* Registros de jornada — sección separada */}
+            <div>
+              <h2 className="text-white font-semibold text-lg mb-3 px-1">Registros de jornada</h2>
+              <div className="space-y-3">
+            {dives.map((dive, index) => {
+              const d = dive as DiveWithSpot;
+              const spot = d.dive_spot ?? d.dive_spots;
+              const city = spot?.city ?? null;
+              const locality = dive.location_name ?? null;
+              const catchesCount = dive.catches?.length ?? 0;
+
+              return (
+                <motion.div
+                  key={dive.id}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.25, delay: index * 0.03 }}
+                  className={`backdrop-blur-xl rounded-2xl border overflow-hidden transition-colors ${
+                    selectedIds.has(dive.id)
+                      ? 'bg-cyan-500/20 border-cyan-400/50'
+                      : 'bg-gradient-to-br from-cyan-500/10 to-blue-600/10 border-cyan-400/20'
+                  }`}
+                >
+                  {/* Pestaña: ciudad, localidad, fecha, capturas — clic abre detalle */}
+                  <button
+                    type="button"
+                    className="w-full px-4 py-4 flex items-center justify-between gap-3 text-left"
+                    onClick={() => setDetailDive(dive)}
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div
+                        className="shrink-0 w-6 h-6 rounded border-2 border-cyan-400 flex items-center justify-center cursor-pointer"
+                        onClick={(e) => { e.stopPropagation(); toggleSelect(dive.id); }}
+                      >
+                        {selectedIds.has(dive.id) && <div className="w-3 h-3 rounded-sm bg-cyan-400" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                          {city && <span className="text-white font-medium">{city}</span>}
+                          {locality && (
+                            <span className="text-cyan-300/90 text-sm">
+                              {city && locality ? ` · ${locality}` : locality}
+                            </span>
+                          )}
+                          {!city && !locality && (
+                            <span className="text-cyan-300/80 text-sm">Sin ubicación</span>
+                          )}
+                        </div>
+                        <p className="text-cyan-300/70 text-xs mt-0.5">{formatDate(dive.dive_date)}</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-cyan-400 text-sm flex items-center gap-1">
+                          <Fish className="w-4 h-4" />
+                          {catchesCount}
+                        </span>
+                        <ChevronRight className="w-5 h-5 text-cyan-400" />
+                      </div>
+                    </div>
+                  </button>
                 </motion.div>
-              ))}
+              );
+            })}
+              </div>
             </div>
           </div>
         )}
       </div>
+
+      {/* Ventana detalle: todos los datos + tabla solunar */}
+      {detailDive && (
+        <DiveDetailWindow
+          dive={detailDive}
+          onClose={() => setDetailDive(null)}
+          onEdit={() => { setDetailDive(null); setEditingDive(detailDive); }}
+          onDelete={() => { setDetailDive(null); setSelectedIds(new Set([detailDive.id])); setDeleteConfirm(true); }}
+          onImageView={(url) => setImageViewerUrl(url)}
+        />
+      )}
+
+      <Dialog open={!!imageViewerUrl} onOpenChange={(open) => !open && setImageViewerUrl(null)}>
+        <DialogContent className="bg-transparent border-0 shadow-none max-w-[95vw] max-h-[95vh] p-0">
+          {imageViewerUrl && (
+            <img
+              src={imageViewerUrl}
+              alt="Captura"
+              className="w-full h-auto max-h-[90vh] object-contain rounded-lg"
+              onClick={() => setImageViewerUrl(null)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={deleteConfirm} onOpenChange={setDeleteConfirm}>
         <AlertDialogContent className="bg-[#0c1f3a] border-cyan-400/20 text-white">
@@ -368,6 +652,9 @@ function EditDiveDialog({ dive, onClose, onSaved }: EditDiveDialogProps) {
   const [diveSpotId, setDiveSpotId] = useState<string>('');
   const [favoriteZones, setFavoriteZones] = useState<Array<{ id: string; nombre: string }>>([]);
   const [tide_coefficient, setTide_coefficient] = useState(dive.tide_coefficient != null ? String(dive.tide_coefficient) : '');
+  const [min_depth_m, setMin_depth_m] = useState((dive as { min_depth_m?: number | null }).min_depth_m != null ? String((dive as { min_depth_m?: number | null }).min_depth_m) : '');
+  const [max_depth_m, setMax_depth_m] = useState(dive.max_depth_m != null ? String(dive.max_depth_m) : '');
+  const [current_type, setCurrent_type] = useState<string>((dive as { current_type?: string | null }).current_type ?? '');
   const [wind_speed_kmh, setWind_speed_kmh] = useState(dive.wind_speed_kmh != null ? String(dive.wind_speed_kmh) : '');
   const [wind_direction, setWind_direction] = useState(dive.wind_direction ?? '');
   const [wave_height_m, setWave_height_m] = useState(dive.wave_height_m != null ? String(dive.wave_height_m) : '');
@@ -433,6 +720,9 @@ function EditDiveDialog({ dive, onClose, onSaved }: EditDiveDialogProps) {
         duration_minutes: dur,
         location_name: locationName ?? undefined,
         dive_spot_id: diveSpotId || null,
+        min_depth_m: min_depth_m === '' ? null : parseFloat(min_depth_m) || null,
+        max_depth_m: max_depth_m === '' ? null : parseFloat(max_depth_m) || null,
+        current_type: current_type.trim() || null,
         tide_coefficient: tide_coefficient === '' ? null : parseInt(tide_coefficient, 10) || null,
         wind_speed_kmh: wind_speed_kmh === '' ? null : parseInt(wind_speed_kmh, 10) || null,
         wind_direction: wind_direction.trim() || null,
@@ -523,6 +813,43 @@ function EditDiveDialog({ dive, onClose, onSaved }: EditDiveDialogProps) {
                 </option>
               ))}
             </select>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div>
+              <Label className="text-cyan-200 text-xs">Prof. desde (m)</Label>
+              <Input
+                type="number"
+                step="0.1"
+                className="bg-white/10 border-cyan-400/30 text-white mt-1"
+                value={min_depth_m}
+                onChange={(e) => setMin_depth_m(e.target.value)}
+                placeholder="—"
+              />
+            </div>
+            <div>
+              <Label className="text-cyan-200 text-xs">Prof. hasta (m)</Label>
+              <Input
+                type="number"
+                step="0.1"
+                className="bg-white/10 border-cyan-400/30 text-white mt-1"
+                value={max_depth_m}
+                onChange={(e) => setMax_depth_m(e.target.value)}
+                placeholder="—"
+              />
+            </div>
+            <div>
+              <Label className="text-cyan-200 text-xs">Corriente</Label>
+              <select
+                value={current_type}
+                onChange={(e) => setCurrent_type(e.target.value)}
+                className="w-full rounded-lg bg-white/10 border border-cyan-400/30 px-3 py-2 text-white mt-1"
+              >
+                <option value="" className="bg-[#0c1f3a]">—</option>
+                <option value="sin corriente" className="bg-[#0c1f3a]">Sin corriente</option>
+                <option value="media" className="bg-[#0c1f3a]">Media</option>
+                <option value="alta" className="bg-[#0c1f3a]">Alta</option>
+              </select>
+            </div>
           </div>
           <div className="grid grid-cols-3 gap-2">
             <div>

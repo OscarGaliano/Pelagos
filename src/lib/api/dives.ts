@@ -1,18 +1,24 @@
 import { supabase } from '@/lib/supabase';
 import type { Dive } from '@/lib/types';
 
-export async function getDives(userId: string): Promise<Dive[]> {
+export type DiveWithSpot = Dive & {
+  dive_spot?: { id: string; name: string; city: string | null; lat?: number; lng?: number } | null;
+  dive_spots?: { id: string; name: string; city: string | null; lat?: number; lng?: number } | null;
+};
+
+export async function getDives(userId: string): Promise<DiveWithSpot[]> {
   const { data, error } = await supabase
     .from('dives')
     .select(`
       *,
-      catches (*)
+      catches (*),
+      dive_spots(id, name, city, lat, lng)
     `)
     .eq('user_id', userId)
     .order('dive_date', { ascending: false });
 
   if (error) throw error;
-  return (data ?? []) as Dive[];
+  return (data ?? []) as DiveWithSpot[];
 }
 
 /** Profundidad máxima registrada del usuario (personal best). Devuelve null si no hay inmersiones con max_depth_m. */
@@ -32,17 +38,19 @@ export async function createDive(dive: {
   user_id: string;
   dive_date: string;
   duration_minutes: number;
-  max_depth_m?: number;
-  temperature_c?: number;
-  tide_coefficient?: number;
-  wind_speed_kmh?: number;
-  wind_direction?: string;
-  wave_height_m?: number;
-  location_name?: string;
-  gps_lat?: number;
-  gps_lng?: number;
+  min_depth_m?: number | null;
+  max_depth_m?: number | null;
+  current_type?: string | null;
+  temperature_c?: number | null;
+  tide_coefficient?: number | null;
+  wind_speed_kmh?: number | null;
+  wind_direction?: string | null;
+  wave_height_m?: number | null;
+  location_name?: string | null;
+  gps_lat?: number | null;
+  gps_lng?: number | null;
   dive_spot_id?: string | null;
-  notes?: string;
+  notes?: string | null;
 }) {
   const { data, error } = await supabase.from('dives').insert(dive).select().single();
   if (error) throw error;
@@ -66,7 +74,9 @@ export async function updateDive(
   updates: {
     dive_date?: string;
     duration_minutes?: number;
+    min_depth_m?: number | null;
     max_depth_m?: number | null;
+    current_type?: string | null;
     temperature_c?: number | null;
     tide_coefficient?: number | null;
     wind_speed_kmh?: number | null;

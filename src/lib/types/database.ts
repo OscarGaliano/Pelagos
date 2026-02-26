@@ -53,7 +53,9 @@ export interface Database {
           user_id: string;
           dive_date: string;
           duration_minutes: number;
+          min_depth_m: number | null;
           max_depth_m: number | null;
+          current_type: string | null;
           temperature_c: number | null;
           tide_coefficient: number | null;
           wind_speed_kmh: number | null;

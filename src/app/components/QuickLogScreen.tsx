@@ -26,7 +26,7 @@ import { getDiveSpots } from '@/lib/api/diveSpots';
 import { formatPeriodRange, getMoonPhase, getMoonPhaseLabel, getSolunarPeriods, type SolunarPeriod } from '@/lib/solunar';
 import { supabase } from '@/lib/supabase';
 import type { DiveSpot } from '@/lib/types';
-import { Calendar, Camera, ChevronDown, ChevronLeft, Clock, Fish, ImageIcon, MapPin, Pencil, Plus, RotateCcw, Save, Search, Star, Trash2, Waves, Wind, X } from 'lucide-react';
+import { Calendar, Camera, ChevronDown, ChevronLeft, Clock, Fish, Gauge, ImageIcon, MapPin, Pencil, Plus, RotateCcw, Save, Search, Star, Trash2, Waves, Wind, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -121,6 +121,9 @@ export function QuickLogScreen({ onNavigate }: QuickLogScreenProps) {
   const [windSpeed, setWindSpeed] = useState<number | null>(null);
   const [windDir, setWindDir] = useState<number | null>(null);
   const [waveHeight, setWaveHeight] = useState<number | null>(null);
+  const [depthFrom, setDepthFrom] = useState<string>('');
+  const [depthTo, setDepthTo] = useState<string>('');
+  const [currentType, setCurrentType] = useState<'sin corriente' | 'media' | 'alta' | ''>('');
   const [loadingConditions, setLoadingConditions] = useState(false);
   const [captures, setCaptures] = useState<CaptureRow[]>([]);
   const [notes, setNotes] = useState('');
@@ -284,10 +287,17 @@ export function QuickLogScreen({ onNavigate }: QuickLogScreenProps) {
       const locationName = diveSpotId
         ? selectedSpot?.name
         : zonas.find((z) => z.id === zonaId)?.nombre;
+      const minM = depthFrom.replace(',', '.');
+      const maxM = depthTo.replace(',', '.');
+      const minDepth = minM !== '' ? parseFloat(minM) : undefined;
+      const maxDepth = maxM !== '' ? parseFloat(maxM) : undefined;
       const dive = await createDive({
         user_id: user.id,
         dive_date: date,
         duration_minutes: durationMinutes,
+        min_depth_m: minDepth != null && Number.isFinite(minDepth) ? minDepth : null,
+        max_depth_m: maxDepth != null && Number.isFinite(maxDepth) ? maxDepth : null,
+        current_type: currentType || null,
         tide_coefficient: (tideCoeffOverride ?? tideCoeff) ?? undefined,
         wind_speed_kmh: windSpeed ?? undefined,
         wind_direction: windDir != null ? windDirectionLabel(windDir) : undefined,
@@ -384,6 +394,55 @@ export function QuickLogScreen({ onNavigate }: QuickLogScreenProps) {
             <div className="backdrop-blur-xl bg-cyan-500/15 rounded-2xl p-4 border border-cyan-400/25 flex flex-col justify-center">
               <p className="text-cyan-300/70 text-xs mb-0.5">Duración</p>
               <p className="text-white font-semibold">{formatDuration(durationMinutes)}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Profundidad (desde/hasta) y Corriente */}
+        <div>
+          <label className="text-cyan-300 text-sm mb-2 block flex items-center gap-2">
+            <Gauge className="w-4 h-4" />
+            Profundidad y corriente
+          </label>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
+            <div className="backdrop-blur-xl bg-white/5 rounded-2xl p-4 border border-cyan-400/20 flex flex-col">
+              <p className="text-cyan-300/70 text-xs mb-1">Prof. desde (m)</p>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                placeholder="—"
+                value={depthFrom}
+                onChange={(e) => setDepthFrom(e.target.value)}
+                className="w-full bg-transparent text-white font-medium placeholder:text-cyan-400/40 h-8 min-h-[2rem]"
+              />
+            </div>
+            <div className="backdrop-blur-xl bg-white/5 rounded-2xl p-4 border border-cyan-400/20 flex flex-col">
+              <p className="text-cyan-300/70 text-xs mb-1">Prof. hasta (m)</p>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                placeholder="—"
+                value={depthTo}
+                onChange={(e) => setDepthTo(e.target.value)}
+                className="w-full bg-transparent text-white font-medium placeholder:text-cyan-400/40 h-8 min-h-[2rem]"
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-2 backdrop-blur-xl bg-white/5 rounded-2xl p-4 border border-cyan-400/20 flex flex-col">
+              <p className="text-cyan-300/70 text-xs mb-1 flex items-center gap-1">
+                <Waves className="w-3.5 h-3.5" /> Corriente
+              </p>
+              <select
+                value={currentType}
+                onChange={(e) => setCurrentType(e.target.value as typeof currentType)}
+                className="w-full bg-transparent text-white font-medium border-0 p-0 focus:ring-0 h-8 min-h-[2rem]"
+              >
+                <option value="" className="bg-[#0c1f3a] text-cyan-400/60">—</option>
+                <option value="sin corriente" className="bg-[#0c1f3a]">Sin corriente</option>
+                <option value="media" className="bg-[#0c1f3a]">Media</option>
+                <option value="alta" className="bg-[#0c1f3a]">Alta</option>
+              </select>
             </div>
           </div>
         </div>

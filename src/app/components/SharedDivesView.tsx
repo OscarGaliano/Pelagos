@@ -5,6 +5,7 @@ import {
   deleteComment,
   deleteSharedDive,
   getComments,
+  getLikers,
   getMySharedDives,
   toggleLike,
   uploadSharedDivePhoto,
@@ -75,6 +76,7 @@ export default function SharedDivesView({
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(initialOpenCreate);
   const [selectedDive, setSelectedDive] = useState<SharedDive | null>(null);
+  const [likersModal, setLikersModal] = useState<{ diveId: string; loading: boolean; likers: Array<{ id: string; display_name: string | null; avatar_url: string | null }> } | null>(null);
 
   useEffect(() => {
     if (initialOpenCreate) setShowCreateForm(true);
@@ -174,6 +176,16 @@ export default function SharedDivesView({
                 onLike={() => handleLike(dive)}
                 onComment={() => setSelectedDive(dive)}
                 onDelete={() => handleDelete(dive.id)}
+                onViewLikers={async () => {
+                  if (dive.likes_count === 0) return;
+                  setLikersModal({ diveId: dive.id, loading: true, likers: [] });
+                  try {
+                    const likersList = await getLikers(dive.id);
+                    setLikersModal({ diveId: dive.id, loading: false, likers: likersList });
+                  } catch {
+                    setLikersModal(null);
+                  }
+                }}
               />
             ))}
           </div>
@@ -214,6 +226,61 @@ export default function SharedDivesView({
           />
         )}
       </AnimatePresence>
+
+      {/* Modal de likes (quiénes dieron like) */}
+      <AnimatePresence>
+        {likersModal && (
+          <motion.div
+            key="likers-modal"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center"
+            onClick={() => setLikersModal(null)}
+          >
+            <motion.div
+              initial={{ y: 100, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 100, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full sm:max-w-md max-h-[60vh] overflow-hidden rounded-t-2xl sm:rounded-2xl bg-gradient-to-b from-[#0c1f3a] to-[#0a1628] border-t sm:border border-cyan-400/30"
+            >
+              <div className="flex items-center justify-between p-4 border-b border-cyan-400/20">
+                <h3 className="text-white font-semibold flex items-center gap-2">
+                  <Heart className="w-5 h-5 text-red-400 fill-current" /> Me gusta
+                </h3>
+                <button type="button" onClick={() => setLikersModal(null)} className="p-1.5 rounded-full hover:bg-white/10 text-cyan-300">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="overflow-y-auto max-h-[calc(60vh-60px)] p-2">
+                {likersModal.loading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
+                  </div>
+                ) : likersModal.likers.length === 0 ? (
+                  <p className="text-cyan-300/60 text-center py-8 text-sm">Nadie ha dado me gusta todavía</p>
+                ) : (
+                  <div className="space-y-1">
+                    {likersModal.likers.map((liker) => (
+                      <div key={liker.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-colors">
+                        {liker.avatar_url ? (
+                          <img src={liker.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
+                        ) : (
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-white font-medium text-sm">
+                            {(liker.display_name || 'U').charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                        <span className="text-white font-medium">{liker.display_name || 'Usuario'}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -224,12 +291,14 @@ function DiveCard({
   onLike,
   onComment,
   onDelete,
+  onViewLikers,
 }: {
   dive: SharedDive;
   userId: string | null;
   onLike: () => void;
   onComment: () => void;
   onDelete: () => void;
+  onViewLikers: () => void;
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const [showShareMenu, setShowShareMenu] = useState(false);
@@ -399,15 +468,20 @@ function DiveCard({
 
         {/* Actions */}
         <div className="flex items-center gap-4 pt-2 border-t border-cyan-400/10">
-          <button
-            onClick={onLike}
-            className={`flex items-center gap-1.5 text-sm ${
-              dive.user_liked ? 'text-red-400' : 'text-cyan-300/70 hover:text-red-400'
-            }`}
-          >
-            <Heart className={`w-5 h-5 ${dive.user_liked ? 'fill-current' : ''}`} />
-            <span>{dive.likes_count}</span>
-          </button>
+          <div className="flex items-center gap-1.5 text-sm">
+            <button
+              onClick={onLike}
+              className={dive.user_liked ? 'text-red-400' : 'text-cyan-300/70 hover:text-red-400'}
+            >
+              <Heart className={`w-5 h-5 ${dive.user_liked ? 'fill-current' : ''}`} />
+            </button>
+            <button
+              onClick={onViewLikers}
+              className={`${dive.likes_count > 0 ? 'hover:underline cursor-pointer' : ''} ${dive.user_liked ? 'text-red-400' : 'text-cyan-300/70'}`}
+            >
+              {dive.likes_count}
+            </button>
+          </div>
           <button
             onClick={onComment}
             className="flex items-center gap-1.5 text-sm text-cyan-300/70 hover:text-cyan-200"

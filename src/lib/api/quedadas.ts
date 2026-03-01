@@ -412,3 +412,213 @@ export async function searchUsersForInvite(query: string, limit = 20) {
   if (error) throw error;
   return data ?? [];
 }
+
+// =============================================================================
+// HISTORIAL DE QUEDADAS/SALIDAS
+// =============================================================================
+
+/** Obtiene quedadas activas (fecha futura o hoy) */
+export async function getActiveQuedadas(userId: string | undefined): Promise<Quedada[]> {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: quedadas, error } = await supabase
+    .from('quedadas')
+    .select('*')
+    .gte('meetup_date', today)
+    .eq('status', 'active')
+    .order('meetup_date', { ascending: true })
+    .order('meetup_time', { ascending: true });
+
+  if (error) throw error;
+  return enrichQuedadas(quedadas ?? [], userId);
+}
+
+/** Obtiene quedadas completadas (pasó la fecha) para el historial */
+export async function getCompletedQuedadas(userId: string | undefined): Promise<Quedada[]> {
+  const { data: quedadas, error } = await supabase
+    .from('quedadas')
+    .select('*')
+    .eq('status', 'completed')
+    .order('meetup_date', { ascending: false });
+
+  if (error) throw error;
+  return enrichQuedadas(quedadas ?? [], userId);
+}
+
+/** Marca quedadas pasadas como completadas y notifica a admins */
+export async function processExpiredQuedadas(): Promise<{ processed: number; notified: number }> {
+  const today = new Date().toISOString().slice(0, 10);
+  
+  // Buscar quedadas activas con fecha pasada
+  const { data: expired, error } = await supabase
+    .from('quedadas')
+    .select('id, admin_id, title, summary_notified')
+    .eq('status', 'active')
+    .lt('meetup_date', today);
+
+  if (error) throw error;
+  if (!expired || expired.length === 0) return { processed: 0, notified: 0 };
+
+  let notifiedCount = 0;
+  for (const q of expired) {
+    // Marcar como completada
+    await supabase
+      .from('quedadas')
+      .update({ status: 'completed', updated_at: new Date().toISOString() })
+      .eq('id', q.id);
+
+    // Notificar al admin si no se ha notificado
+    if (!q.summary_notified) {
+      await createNotification(
+        q.admin_id,
+        'quedada_tell_us',
+        '¿Cómo fue la quedada?',
+        `Cuéntanos cómo fue "${q.title ?? 'tu quedada'}" y compártelo con la comunidad`,
+        { quedada_id: q.id }
+      );
+      await supabase
+        .from('quedadas')
+        .update({ summary_notified: true })
+        .eq('id', q.id);
+      notifiedCount++;
+    }
+  }
+
+  return { processed: expired.length, notified: notifiedCount };
+}
+
+/** Guarda el resumen de una quedada (solo admin) */
+export async function saveSummary(
+  quedadaId: string,
+  adminId: string,
+  summary: string,
+  images?: string[]
+): Promise<void> {
+  const { error } = await supabase
+    .from('quedadas')
+    .update({
+      summary,
+      summary_images: images ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', quedadaId)
+    .eq('admin_id', adminId);
+
+  if (error) throw error;
+}
+
+/** Publica el resumen en novedades (solo admin) */
+export async function publishSummary(quedadaId: string, adminId: string): Promise<void> {
+  // Verificar que hay resumen
+  const { data: q } = await supabase
+    .from('quedadas')
+    .select('summary, title')
+    .eq('id', quedadaId)
+    .eq('admin_id', adminId)
+    .single();
+
+  if (!q?.summary) throw new Error('No hay resumen para publicar');
+
+  const { error } = await supabase
+    .from('quedadas')
+    .update({
+      summary_published_at: new Date().toISOString(),
+      published_in_novedades: true,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', quedadaId)
+    .eq('admin_id', adminId);
+
+  if (error) throw error;
+
+  // Notificar a todos los participantes
+  const { data: participants } = await supabase
+    .from('quedada_participants')
+    .select('user_id')
+    .eq('quedada_id', quedadaId)
+    .neq('user_id', adminId);
+
+  for (const p of participants ?? []) {
+    await createNotification(
+      p.user_id,
+      'quedada_summary_published',
+      'Resumen publicado',
+      `Se ha publicado el resumen de "${q.title ?? 'la quedada'}" en novedades`,
+      { quedada_id: quedadaId }
+    );
+  }
+}
+
+/** Obtiene resúmenes publicados para novedades */
+export async function getPublishedSummaries(userId: string | undefined): Promise<Quedada[]> {
+  const { data: quedadas, error } = await supabase
+    .from('quedadas')
+    .select('*')
+    .not('summary_published_at', 'is', null)
+    .order('summary_published_at', { ascending: false })
+    .limit(20);
+
+  if (error) throw error;
+  return enrichQuedadas(quedadas ?? [], userId);
+}
+
+/** Función auxiliar para enriquecer quedadas con participantes y perfiles */
+async function enrichQuedadas(
+  list: (Quedada & { admin_id: string })[],
+  userId: string | undefined
+): Promise<Quedada[]> {
+  if (list.length === 0) return [];
+
+  const ids = list.map((q) => q.id);
+  const [participantsRes, invitationsRes, requestsRes] = await Promise.all([
+    supabase.from('quedada_participants').select('quedada_id, user_id, role').in('quedada_id', ids),
+    userId ? supabase.from('quedada_invitations').select('quedada_id, user_id, status').eq('user_id', userId).in('quedada_id', ids) : { data: [] },
+    userId ? supabase.from('quedada_join_requests').select('quedada_id, user_id, status').eq('user_id', userId).in('quedada_id', ids) : { data: [] },
+  ]);
+
+  const participantsByQuedada = new Map<string, { user_id: string; role: string }[]>();
+  (participantsRes.data ?? []).forEach((p: { quedada_id: string; user_id: string; role: string }) => {
+    if (!participantsByQuedada.has(p.quedada_id)) participantsByQuedada.set(p.quedada_id, []);
+    participantsByQuedada.get(p.quedada_id)!.push({ user_id: p.user_id, role: p.role });
+  });
+
+  const myInvitations = new Map<string, string>();
+  (invitationsRes.data ?? []).forEach((i: { quedada_id: string; status: string }) => myInvitations.set(i.quedada_id, i.status));
+  const myRequests = new Map<string, string>();
+  (requestsRes.data ?? []).forEach((r: { quedada_id: string; status: string }) => myRequests.set(r.quedada_id, r.status));
+
+  const allUserIds = new Set<string>(list.map((q) => q.admin_id));
+  (participantsRes.data ?? []).forEach((p: { user_id: string }) => allUserIds.add(p.user_id));
+  const userIds = Array.from(allUserIds);
+  const profileMap = new Map<string, { display_name: string | null; avatar_url: string | null }>();
+  if (userIds.length > 0) {
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('id, display_name, avatar_url')
+      .in('id', userIds);
+    (profiles ?? []).forEach((pr: { id: string; display_name: string | null; avatar_url: string | null }) => {
+      profileMap.set(pr.id, { display_name: pr.display_name, avatar_url: pr.avatar_url });
+    });
+  }
+
+  return list.map((q) => {
+    const participants = participantsByQuedada.get(q.id) ?? [];
+    const isAdmin = userId ? q.admin_id === userId : false;
+    const isParticipant = userId ? participants.some((p) => p.user_id === userId) : false;
+    const creator_profile = profileMap.get(q.admin_id) ?? null;
+    const list_participants = participants.map((p) => ({
+      user_id: p.user_id,
+      role: p.role,
+      ...(profileMap.get(p.user_id) ?? { display_name: null, avatar_url: null }),
+    }));
+    return {
+      ...q,
+      participants_count: participants.length,
+      is_admin: isAdmin,
+      is_participant: isParticipant,
+      my_invitation: (userId ? myInvitations.get(q.id) : undefined) as Quedada['my_invitation'],
+      my_request: (userId ? myRequests.get(q.id) : undefined) as Quedada['my_request'],
+      creator_profile,
+      list_participants,
+    };
+  }) as Quedada[];
+}

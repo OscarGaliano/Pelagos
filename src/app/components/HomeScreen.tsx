@@ -1,5 +1,5 @@
 import { getHomeSections, getNews, type HomeSection, type News } from '@/lib/api/adminPanel';
-import { getNovedadesQuedadas } from '@/lib/api/quedadas';
+import { getNovedadesQuedadas, getPublishedSummaries } from '@/lib/api/quedadas';
 import {
   addComment,
   deleteComment,
@@ -7,6 +7,7 @@ import {
   getComments,
   getAllSharedDives,
   getFeedSeenTimestamps,
+  getLikers,
   markFeedPublicationAsSeen,
   toggleLike,
   type SharedDive,
@@ -76,6 +77,7 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
   const [selectedNews, setSelectedNews] = useState<News | null>(null);
   const [selectedSection, setSelectedSection] = useState<HomeSection | null>(null);
   const [adminProfile, setAdminProfile] = useState<AdminProfile | null>(null);
+  const [likersModal, setLikersModal] = useState<{ diveId: string; loading: boolean; likers: Array<{ id: string; display_name: string | null; avatar_url: string | null }> } | null>(null);
   
   // Secciones ocultas manualmente por el usuario
   const [hiddenSections, setHiddenSections] = useState<Set<SectionId>>(() => {
@@ -136,11 +138,16 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
     const { data: { user } } = await supabase.auth.getUser();
     setCurrentUserId(user?.id ?? null);
 
-    // Cargar novedades
+    // Cargar novedades: quedadas activas + resúmenes publicados
     setNovedadesLoading(true);
     try {
-      const data = await getNovedadesQuedadas(user?.id ?? undefined);
-      setNovedades(data);
+      const [activeQuedadas, publishedSummaries] = await Promise.all([
+        getNovedadesQuedadas(user?.id ?? undefined),
+        getPublishedSummaries(user?.id ?? undefined),
+      ]);
+      // Combinar: primero resúmenes (más recientes), luego quedadas activas
+      const combined = [...publishedSummaries, ...activeQuedadas];
+      setNovedades(combined);
     } catch {
       setNovedades([]);
     } finally {
@@ -416,25 +423,43 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
                           <p className={`px-2 py-1.5 text-sm line-clamp-2 ${isDark ? 'text-cyan-200/90' : 'text-slate-600'}`}>{dive.description}</p>
                         )}
                         <div className="flex items-center gap-4 px-2 py-2 border-t border-cyan-400/10">
-                          <button
-                            type="button"
-                            disabled={!currentUserId || likingId === dive.id}
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              if (!currentUserId) return;
-                              setLikingId(dive.id);
-                              try {
-                                const liked = await toggleLike(dive.id, currentUserId);
-                                setFeedDives((prev) => prev.map((d) => (d.id === dive.id ? { ...d, user_liked: liked, likes_count: d.likes_count + (liked ? 1 : -1) } : d)));
-                              } finally {
-                                setLikingId(null);
-                              }
-                            }}
-                            className={`flex items-center gap-1.5 text-sm disabled:opacity-60 ${dive.user_liked ? 'text-red-400' : isDark ? 'text-cyan-300/80 hover:text-red-400' : 'text-slate-600 hover:text-red-500'}`}
-                          >
-                            {likingId === dive.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Heart className={`w-4 h-4 ${dive.user_liked ? 'fill-current' : ''}`} />}
-                            <span>{dive.likes_count}</span>
-                          </button>
+                          <div className="flex items-center gap-1.5 text-sm">
+                            <button
+                              type="button"
+                              disabled={!currentUserId || likingId === dive.id}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (!currentUserId) return;
+                                setLikingId(dive.id);
+                                try {
+                                  const liked = await toggleLike(dive.id, currentUserId);
+                                  setFeedDives((prev) => prev.map((d) => (d.id === dive.id ? { ...d, user_liked: liked, likes_count: d.likes_count + (liked ? 1 : -1) } : d)));
+                                } finally {
+                                  setLikingId(null);
+                                }
+                              }}
+                              className={`disabled:opacity-60 ${dive.user_liked ? 'text-red-400' : isDark ? 'text-cyan-300/80 hover:text-red-400' : 'text-slate-600 hover:text-red-500'}`}
+                            >
+                              {likingId === dive.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Heart className={`w-4 h-4 ${dive.user_liked ? 'fill-current' : ''}`} />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (dive.likes_count === 0) return;
+                                setLikersModal({ diveId: dive.id, loading: true, likers: [] });
+                                try {
+                                  const likersList = await getLikers(dive.id);
+                                  setLikersModal({ diveId: dive.id, loading: false, likers: likersList });
+                                } catch {
+                                  setLikersModal(null);
+                                }
+                              }}
+                              className={`${dive.likes_count > 0 ? 'hover:underline cursor-pointer' : ''} ${dive.user_liked ? 'text-red-400' : isDark ? 'text-cyan-300/80' : 'text-slate-600'}`}
+                            >
+                              {dive.likes_count}
+                            </button>
+                          </div>
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); markDiveAsSeenIfNeeded(dive.id); setSelectedDiveForComments(dive); }}
@@ -559,6 +584,73 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
                         const tipo = (q as Quedada & { tipo?: string }).tipo ?? 'salida';
                         const creator = (q as Quedada & { creator_profile?: { display_name: string | null; avatar_url: string | null } }).creator_profile;
                         const adminId = (q as Quedada & { admin_id?: string }).admin_id;
+                        const hasSummary = !!q.summary_published_at;
+                        const listParticipants = (q as Quedada & { list_participants?: Array<{ user_id: string; display_name: string | null; avatar_url: string | null }> }).list_participants ?? [];
+                        
+                        // Si es un resumen publicado, mostrar de forma diferente
+                        if (hasSummary) {
+                          return (
+                            <div key={q.id} className="px-2 outline-none">
+                              <motion.button
+                                type="button"
+                                whileTap={{ scale: 0.98 }}
+                                onClick={() => openNovedad(q)}
+                                className={`w-full text-left rounded-xl border p-5 h-full min-h-[160px] flex flex-col gap-2.5 ${
+                                  isDark 
+                                    ? 'bg-gradient-to-br from-amber-500/15 to-orange-500/10 border-amber-400/30' 
+                                    : 'bg-amber-50 border-amber-300 shadow-sm'
+                                }`}
+                              >
+                                {/* Badge de resumen */}
+                                <div className="flex items-center justify-between">
+                                  <span className={`text-xs px-2 py-0.5 rounded-full ${isDark ? 'bg-amber-500/30 text-amber-200' : 'bg-amber-100 text-amber-700'}`}>
+                                    Cómo fue
+                                  </span>
+                                  <span className={`text-xs ${isDark ? 'text-amber-300/60' : 'text-amber-600'}`}>
+                                    {new Date(q.meetup_date + 'T12:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
+                                  </span>
+                                </div>
+                                
+                                {/* Título */}
+                                <span className={`font-medium text-sm ${isDark ? 'text-white' : 'text-slate-900'}`}>{q.title || TIPO_LABEL[tipo]}</span>
+                                
+                                {/* Resumen (truncado) */}
+                                <p className={`text-sm line-clamp-2 ${isDark ? 'text-amber-200/80' : 'text-amber-700'}`}>
+                                  {q.summary}
+                                </p>
+                                
+                                {/* Participantes etiquetados */}
+                                {listParticipants.length > 0 && (
+                                  <div className="flex items-center gap-1 mt-auto">
+                                    <div className="flex -space-x-1.5">
+                                      {listParticipants.slice(0, 4).map((p) => (
+                                        <div
+                                          key={p.user_id}
+                                          className={`h-6 w-6 rounded-full border-2 flex items-center justify-center overflow-hidden ${isDark ? 'border-[#0a1628] bg-amber-500/30' : 'border-white bg-amber-100'}`}
+                                        >
+                                          {p.avatar_url ? (
+                                            <img src={p.avatar_url} alt="" className="h-full w-full object-cover" />
+                                          ) : (
+                                            <span className={`text-[10px] ${isDark ? 'text-amber-200' : 'text-amber-700'}`}>
+                                              {(p.display_name || '?').slice(0, 2).toUpperCase()}
+                                            </span>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                    {listParticipants.length > 4 && (
+                                      <span className={`text-xs ${isDark ? 'text-amber-300/70' : 'text-amber-600'}`}>
+                                        +{listParticipants.length - 4}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </motion.button>
+                            </div>
+                          );
+                        }
+                        
+                        // Quedada activa (original)
                         return (
                           <div key={q.id} className="px-2 outline-none">
                             <motion.button
@@ -712,6 +804,61 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
               setFeedDives((prev) => prev.map((d) => (d.id === selectedDiveForComments.id ? { ...d, comments_count: count } : d)));
             }}
           />
+        )}
+      </AnimatePresence>
+
+      {/* Modal de likes (quiénes dieron like) */}
+      <AnimatePresence>
+        {likersModal && (
+          <motion.div
+            key="likers-modal"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center"
+            onClick={() => setLikersModal(null)}
+          >
+            <motion.div
+              initial={{ y: 100, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 100, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full sm:max-w-md max-h-[60vh] overflow-hidden rounded-t-2xl sm:rounded-2xl bg-gradient-to-b from-[#0c1f3a] to-[#0a1628] border-t sm:border border-cyan-400/30"
+            >
+              <div className="flex items-center justify-between p-4 border-b border-cyan-400/20">
+                <h3 className="text-white font-semibold flex items-center gap-2">
+                  <Heart className="w-5 h-5 text-red-400 fill-current" /> Me gusta
+                </h3>
+                <button type="button" onClick={() => setLikersModal(null)} className="p-1.5 rounded-full hover:bg-white/10 text-cyan-300">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="overflow-y-auto max-h-[calc(60vh-60px)] p-2">
+                {likersModal.loading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
+                  </div>
+                ) : likersModal.likers.length === 0 ? (
+                  <p className="text-cyan-300/60 text-center py-8 text-sm">Nadie ha dado me gusta todavía</p>
+                ) : (
+                  <div className="space-y-1">
+                    {likersModal.likers.map((liker) => (
+                      <div key={liker.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-colors">
+                        {liker.avatar_url ? (
+                          <img src={liker.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover" />
+                        ) : (
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-white font-medium text-sm">
+                            {(liker.display_name || 'U').charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                        <span className="text-white font-medium">{liker.display_name || 'Usuario'}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

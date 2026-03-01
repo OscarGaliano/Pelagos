@@ -1,3 +1,4 @@
+import { createNotification } from '@/lib/api/notifications';
 import { supabase } from '@/lib/supabase';
 import type { Database } from '@/lib/types/database';
 
@@ -420,8 +421,57 @@ export async function toggleLike(sharedDiveId: string, userId: string): Promise<
     await supabase
       .from('shared_dive_likes')
       .insert({ shared_dive_id: sharedDiveId, user_id: userId });
+
+    // Notificar al dueño de la publicación (solo si no es uno mismo)
+    try {
+      const { data: dive } = await supabase
+        .from('shared_dives')
+        .select('user_id')
+        .eq('id', sharedDiveId)
+        .single();
+      if (dive && dive.user_id !== userId) {
+        const { data: liker } = await supabase
+          .from('profiles')
+          .select('display_name')
+          .eq('id', userId)
+          .single();
+        const likerName = liker?.display_name || 'Alguien';
+        await createNotification(
+          dive.user_id,
+          'dive_like',
+          `${likerName} le ha dado me gusta a tu publicación`,
+          undefined,
+          { shared_dive_id: sharedDiveId, liker_id: userId }
+        );
+      }
+    } catch {
+      // Ignorar errores de notificación para no romper el like
+    }
+
     return true;
   }
+}
+
+/** Obtiene los usuarios que han dado like a una publicación */
+export async function getLikers(sharedDiveId: string): Promise<Array<{ id: string; display_name: string | null; avatar_url: string | null }>> {
+  const { data: likes } = await supabase
+    .from('shared_dive_likes')
+    .select('user_id')
+    .eq('shared_dive_id', sharedDiveId);
+
+  if (!likes || likes.length === 0) return [];
+
+  const userIds = likes.map(l => l.user_id);
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('id, display_name, avatar_url')
+    .in('id', userIds);
+
+  return (profiles ?? []).map(p => ({
+    id: p.id,
+    display_name: p.display_name,
+    avatar_url: p.avatar_url,
+  }));
 }
 
 export async function getComments(sharedDiveId: string): Promise<SharedDiveComment[]> {
@@ -473,6 +523,28 @@ export async function addComment(
     .select('display_name, avatar_url')
     .eq('id', userId)
     .single();
+
+  // Notificar al dueño de la publicación (solo si no es uno mismo)
+  try {
+    const { data: dive } = await supabase
+      .from('shared_dives')
+      .select('user_id')
+      .eq('id', sharedDiveId)
+      .single();
+    if (dive && dive.user_id !== userId) {
+      const commenterName = profile?.display_name || 'Alguien';
+      const truncatedComment = content.trim().length > 50 ? content.trim().slice(0, 47) + '...' : content.trim();
+      await createNotification(
+        dive.user_id,
+        'dive_comment',
+        `${commenterName} ha comentado tu publicación`,
+        truncatedComment,
+        { shared_dive_id: sharedDiveId, commenter_id: userId, comment_id: data.id }
+      );
+    }
+  } catch {
+    // Ignorar errores de notificación
+  }
 
   return {
     ...data,

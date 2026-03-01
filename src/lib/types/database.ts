@@ -173,13 +173,20 @@ export interface Database {
           max_participants: number | null;
           join_mode: 'invite' | 'open' | 'request';
           published_in_novedades: boolean;
+          status: 'active' | 'completed';
+          summary: string | null;
+          summary_published_at: string | null;
+          summary_images: string[] | null;
+          summary_notified: boolean;
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database['public']['Tables']['quedadas']['Row'], 'id' | 'created_at' | 'updated_at'> & {
+        Insert: Omit<Database['public']['Tables']['quedadas']['Row'], 'id' | 'created_at' | 'updated_at' | 'status' | 'summary_notified'> & {
           id?: string;
           created_at?: string;
           updated_at?: string;
+          status?: 'active' | 'completed';
+          summary_notified?: boolean;
         };
         Update: Partial<Database['public']['Tables']['quedadas']['Insert']>;
       };

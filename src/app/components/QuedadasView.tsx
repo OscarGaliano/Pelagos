@@ -5,6 +5,7 @@ import {
     acceptJoinRequest,
     createQuedada,
     denyJoinRequest,
+    getCompletedQuedadas,
     getJoinRequests,
     getParticipants,
     getQuedadaById,
@@ -12,7 +13,10 @@ import {
     inviteUser,
     joinOpen,
     leaveQuedada,
+    processExpiredQuedadas,
+    publishSummary,
     requestToJoin,
+    saveSummary,
     searchUsersForInvite,
     updateQuedada,
     type EventoTipo,
@@ -26,12 +30,17 @@ import {
     CalendarDays,
     Check,
     ChevronLeft,
+    Clock,
+    History,
+    ImagePlus,
     Loader2,
     MapPin,
     Megaphone,
+    MessageSquare,
     Pencil,
     Plus,
     Search,
+    Send,
     UserPlus,
     Users,
     X,
@@ -128,11 +137,14 @@ interface QuedadasViewProps {
 export function QuedadasView({ onBack, initialQuedadaId }: QuedadasViewProps) {
   const [userId, setUserId] = useState<string | null>(null);
   const [view, setView] = useState<'list' | 'create' | 'detail'>('list');
+  const [tab, setTab] = useState<'active' | 'history'>('active');
   const [createTipo, setCreateTipo] = useState<EventoTipo>('salida');
   const [quedadas, setQuedadas] = useState<Quedada[]>([]);
+  const [historyQuedadas, setHistoryQuedadas] = useState<Quedada[]>([]);
   const [selectedQuedada, setSelectedQuedada] = useState<Quedada | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [summaryModal, setSummaryModal] = useState<Quedada | null>(null);
 
   const loadQuedadas = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -144,8 +156,16 @@ export function QuedadasView({ onBack, initialQuedadaId }: QuedadasViewProps) {
     setLoading(true);
     setError(null);
     try {
+      // Procesar quedadas expiradas primero
+      await processExpiredQuedadas();
+      // Cargar todas las quedadas
       const data = await getQuedadas(user.id);
-      setQuedadas(data);
+      // Separar activas e historial
+      const today = new Date().toISOString().slice(0, 10);
+      const active = data.filter(q => q.meetup_date >= today && q.status === 'active');
+      const history = data.filter(q => q.meetup_date < today || q.status === 'completed');
+      setQuedadas(active);
+      setHistoryQuedadas(history);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al cargar quedadas');
     } finally {
@@ -266,25 +286,64 @@ export function QuedadasView({ onBack, initialQuedadaId }: QuedadasViewProps) {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3 mb-6">
-              <motion.button
-                onClick={() => { setCreateTipo('quedada'); setView('create'); }}
-                whileTap={{ scale: 0.98 }}
-                className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 py-3 text-white font-medium"
+            {/* Pestañas Activas / Historial */}
+            <div className="flex gap-2 mb-4">
+              <button
+                type="button"
+                onClick={() => setTab('active')}
+                className={`flex-1 py-2.5 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
+                  tab === 'active'
+                    ? 'bg-cyan-500/30 text-cyan-200 border border-cyan-400/40'
+                    : 'bg-white/5 text-cyan-300/60 border border-white/10'
+                }`}
               >
-                <Plus className="w-5 h-5" />
-                Crear quedada
-              </motion.button>
-              <motion.button
-                onClick={() => { setCreateTipo('salida'); setView('create'); }}
-                whileTap={{ scale: 0.98 }}
-                className="flex items-center justify-center gap-2 rounded-xl border border-cyan-400/50 bg-cyan-500/20 py-3 text-cyan-200 font-medium"
+                <Clock className="w-4 h-4" />
+                Activas
+                {quedadas.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-cyan-500/30 text-xs">{quedadas.length}</span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab('history')}
+                className={`flex-1 py-2.5 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
+                  tab === 'history'
+                    ? 'bg-amber-500/30 text-amber-200 border border-amber-400/40'
+                    : 'bg-white/5 text-cyan-300/60 border border-white/10'
+                }`}
               >
-                <Plus className="w-5 h-5" />
-                Crear salida
-              </motion.button>
+                <History className="w-4 h-4" />
+                Historial
+                {historyQuedadas.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full bg-amber-500/30 text-xs">{historyQuedadas.length}</span>
+                )}
+              </button>
             </div>
-            {quedadas.length === 0 ? (
+
+            {/* Botones crear (solo en pestaña activas) */}
+            {tab === 'active' && (
+              <div className="grid grid-cols-2 gap-3 mb-6">
+                <motion.button
+                  onClick={() => { setCreateTipo('quedada'); setView('create'); }}
+                  whileTap={{ scale: 0.98 }}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 py-3 text-white font-medium"
+                >
+                  <Plus className="w-5 h-5" />
+                  Crear quedada
+                </motion.button>
+                <motion.button
+                  onClick={() => { setCreateTipo('salida'); setView('create'); }}
+                  whileTap={{ scale: 0.98 }}
+                  className="flex items-center justify-center gap-2 rounded-xl border border-cyan-400/50 bg-cyan-500/20 py-3 text-cyan-200 font-medium"
+                >
+                  <Plus className="w-5 h-5" />
+                  Crear salida
+                </motion.button>
+              </div>
+            )}
+            
+            {/* Lista de quedadas activas */}
+            {tab === 'active' && quedadas.length === 0 ? (
               <div className="backdrop-blur-xl bg-white/5 rounded-2xl border border-cyan-400/20 p-8 text-center">
                 <CalendarDays className="w-12 h-12 text-cyan-400 mx-auto mb-3 opacity-70" />
                 <p className="text-cyan-200 mb-1">Aún no hay quedadas</p>
@@ -390,12 +449,390 @@ export function QuedadasView({ onBack, initialQuedadaId }: QuedadasViewProps) {
                 })}
               </ul>
             )}
+
+            {/* HISTORIAL */}
+            {tab === 'history' && (
+              <>
+                {historyQuedadas.length === 0 ? (
+                  <div className="backdrop-blur-xl bg-white/5 rounded-2xl border border-amber-400/20 p-8 text-center">
+                    <History className="w-12 h-12 text-amber-400 mx-auto mb-3 opacity-70" />
+                    <p className="text-amber-200 mb-1">No hay quedadas en el historial</p>
+                    <p className="text-amber-300/80 text-sm">Las quedadas pasadas aparecerán aquí.</p>
+                  </div>
+                ) : (
+                  <ul className="space-y-4">
+                    {historyQuedadas.map((q) => {
+                      const tipo = (q as Quedada & { tipo?: EventoTipo }).tipo ?? 'salida';
+                      const creator = (q as Quedada & { creator_profile?: { display_name: string | null; avatar_url: string | null } }).creator_profile;
+                      const listParticipants = (q as Quedada & { list_participants?: Array<{ user_id: string; role: string; display_name: string | null; avatar_url: string | null }> }).list_participants ?? [];
+                      const hasSummary = !!q.summary;
+                      const isPublished = !!q.summary_published_at;
+                      const canWriteSummary = q.is_admin && !hasSummary;
+                      const canPublish = q.is_admin && hasSummary && !isPublished;
+
+                      return (
+                        <motion.li
+                          key={q.id}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="backdrop-blur-xl bg-white/5 rounded-2xl border border-amber-400/20 overflow-hidden"
+                        >
+                          <div className="p-4">
+                            {/* Cabecera */}
+                            <div className="flex items-start gap-3 mb-3">
+                              <div className="h-10 w-10 flex-shrink-0 rounded-full bg-amber-500/30 flex items-center justify-center overflow-hidden border border-amber-400/30">
+                                {creator?.avatar_url ? (
+                                  <img src={creator.avatar_url} alt="" className="h-full w-full object-cover" />
+                                ) : (
+                                  <span className="text-amber-200 text-sm font-medium">
+                                    {(creator?.display_name || '?').slice(0, 2).toUpperCase()}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className="text-white font-medium truncate">{q.title || TIPO_LABEL[tipo]}</span>
+                                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                                    <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-200">
+                                      {TIPO_LABEL[tipo]}
+                                    </span>
+                                    {isPublished && (
+                                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/30 text-green-200">Publicado</span>
+                                    )}
+                                  </div>
+                                </div>
+                                <p className="text-amber-300/70 text-xs mt-0.5">
+                                  {new Date(q.meetup_date + 'T12:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Lugar */}
+                            <div className="flex items-center gap-2 text-amber-300/90 text-sm mb-2">
+                              <MapPin className="w-4 h-4 flex-shrink-0" />
+                              <span className="truncate">{q.place}</span>
+                            </div>
+
+                            {/* Participantes etiquetados */}
+                            {listParticipants.length > 0 && (
+                              <div className="mb-3">
+                                <p className="text-amber-200/60 text-xs mb-2">Participantes:</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {listParticipants.map((p) => (
+                                    <div
+                                      key={p.user_id}
+                                      className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-amber-500/20 border border-amber-400/30"
+                                    >
+                                      <div className="h-5 w-5 rounded-full bg-amber-500/30 flex items-center justify-center overflow-hidden">
+                                        {p.avatar_url ? (
+                                          <img src={p.avatar_url} alt="" className="h-full w-full object-cover" />
+                                        ) : (
+                                          <span className="text-amber-200 text-[10px]">
+                                            {(p.display_name || '?').slice(0, 2).toUpperCase()}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <span className="text-amber-200 text-xs">{p.display_name || 'Usuario'}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Resumen si existe */}
+                            {hasSummary && (
+                              <div className="bg-amber-500/10 border border-amber-400/20 rounded-xl p-3 mb-3">
+                                <div className="flex items-center gap-2 text-amber-300 text-xs mb-1.5">
+                                  <MessageSquare className="w-3.5 h-3.5" />
+                                  <span>Cómo fue:</span>
+                                </div>
+                                <p className="text-amber-100/90 text-sm">{q.summary}</p>
+                                {q.summary_images && q.summary_images.length > 0 && (
+                                  <div className="flex gap-2 mt-2 overflow-x-auto">
+                                    {q.summary_images.map((img, i) => (
+                                      <img
+                                        key={i}
+                                        src={img}
+                                        alt=""
+                                        className="h-20 w-20 rounded-lg object-cover flex-shrink-0"
+                                      />
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Acciones del admin */}
+                            {q.is_admin && (
+                              <div className="flex gap-2 mt-3">
+                                {canWriteSummary && (
+                                  <motion.button
+                                    onClick={() => setSummaryModal(q)}
+                                    whileTap={{ scale: 0.98 }}
+                                    className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white text-sm font-medium"
+                                  >
+                                    <Pencil className="w-4 h-4" />
+                                    Cuéntanos cómo fue
+                                  </motion.button>
+                                )}
+                                {canPublish && (
+                                  <motion.button
+                                    onClick={async () => {
+                                      try {
+                                        await publishSummary(q.id, userId!);
+                                        loadQuedadas();
+                                      } catch (e) {
+                                        setError(e instanceof Error ? e.message : 'Error al publicar');
+                                      }
+                                    }}
+                                    whileTap={{ scale: 0.98 }}
+                                    className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-green-500/30 border border-green-400/40 text-green-200 text-sm font-medium"
+                                  >
+                                    <Send className="w-4 h-4" />
+                                    Publicar en novedades
+                                  </motion.button>
+                                )}
+                                {hasSummary && !isPublished && (
+                                  <motion.button
+                                    onClick={() => setSummaryModal(q)}
+                                    whileTap={{ scale: 0.98 }}
+                                    className="py-2.5 px-4 rounded-xl bg-white/10 text-amber-200 text-sm"
+                                  >
+                                    <Pencil className="w-4 h-4" />
+                                  </motion.button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </motion.li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </>
+            )}
           </>
         )}
       </div>
+
+      {/* Modal escribir resumen */}
+      {summaryModal && (
+        <SummaryModal
+          quedada={summaryModal}
+          userId={userId!}
+          onClose={() => setSummaryModal(null)}
+          onSaved={() => {
+            setSummaryModal(null);
+            loadQuedadas();
+          }}
+        />
+      )}
     </div>
   );
 }
+
+// =============================================================================
+// MODAL PARA ESCRIBIR RESUMEN
+// =============================================================================
+
+function SummaryModal({
+  quedada,
+  userId,
+  onClose,
+  onSaved,
+}: {
+  quedada: Quedada;
+  userId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [summary, setSummary] = useState(quedada.summary ?? '');
+  const [images, setImages] = useState<string[]>(quedada.summary_images ?? []);
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const listParticipants = (quedada as Quedada & { list_participants?: Array<{ user_id: string; display_name: string | null; avatar_url: string | null }> }).list_participants ?? [];
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    setUploading(true);
+    setError(null);
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() ?? 'jpg';
+      const fileName = `${quedada.id}/${Date.now()}.${ext}`;
+      const { error: uploadError } = await supabase.storage
+        .from('quedada-summaries')
+        .upload(fileName, file, { upsert: true });
+      
+      if (uploadError) throw uploadError;
+      
+      const { data: { publicUrl } } = supabase.storage
+        .from('quedada-summaries')
+        .getPublicUrl(fileName);
+      
+      setImages(prev => [...prev, publicUrl]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al subir imagen');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!summary.trim()) {
+      setError('Escribe un resumen de cómo fue la quedada');
+      return;
+    }
+    
+    setSaving(true);
+    setError(null);
+    try {
+      await saveSummary(quedada.id, userId, summary.trim(), images.length > 0 ? images : undefined);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error al guardar');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <motion.div
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        className="relative w-full max-w-lg bg-gradient-to-b from-[#0c1f3a] to-[#0a1628] rounded-t-3xl border-t border-amber-400/30 max-h-[90vh] overflow-hidden flex flex-col"
+      >
+        {/* Header */}
+        <div className="px-4 py-3 border-b border-amber-400/20 flex items-center justify-between">
+          <h2 className="text-white font-medium">Cuéntanos cómo fue</h2>
+          <button type="button" onClick={onClose} className="p-2 rounded-full hover:bg-white/10">
+            <X className="w-5 h-5 text-amber-400" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Info de la quedada */}
+          <div className="bg-amber-500/10 rounded-xl p-3">
+            <p className="text-white font-medium">{quedada.title || 'Quedada'}</p>
+            <p className="text-amber-300/80 text-sm">
+              {new Date(quedada.meetup_date + 'T12:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}
+              {' · '}{quedada.place}
+            </p>
+          </div>
+
+          {/* Participantes etiquetados */}
+          {listParticipants.length > 0 && (
+            <div>
+              <p className="text-amber-200/70 text-xs mb-2">Participantes que aparecerán etiquetados:</p>
+              <div className="flex flex-wrap gap-2">
+                {listParticipants.map((p) => (
+                  <div
+                    key={p.user_id}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-cyan-500/20 border border-cyan-400/30"
+                  >
+                    <div className="h-5 w-5 rounded-full bg-cyan-500/30 flex items-center justify-center overflow-hidden">
+                      {p.avatar_url ? (
+                        <img src={p.avatar_url} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <span className="text-cyan-200 text-[10px]">
+                          {(p.display_name || '?').slice(0, 2).toUpperCase()}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-cyan-200 text-xs">{p.display_name || 'Usuario'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Textarea resumen */}
+          <div>
+            <label className="text-amber-200/70 text-sm mb-1.5 block">¿Cómo fue la experiencia?</label>
+            <textarea
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+              placeholder="Cuéntanos qué tal fue la quedada, capturas, anécdotas..."
+              rows={4}
+              className="w-full bg-white/5 border border-amber-400/30 rounded-xl px-3 py-2.5 text-white placeholder:text-amber-300/40 focus:outline-none focus:ring-2 focus:ring-amber-400/50 resize-none"
+            />
+          </div>
+
+          {/* Imágenes */}
+          <div>
+            <label className="text-amber-200/70 text-sm mb-1.5 block">Fotos (opcional)</label>
+            <div className="flex flex-wrap gap-2">
+              {images.map((img, i) => (
+                <div key={i} className="relative">
+                  <img src={img} alt="" className="h-20 w-20 rounded-lg object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => setImages(prev => prev.filter((_, idx) => idx !== i))}
+                    className="absolute -top-1 -right-1 p-1 rounded-full bg-red-500 text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+              <label className="h-20 w-20 rounded-lg border-2 border-dashed border-amber-400/40 flex items-center justify-center cursor-pointer hover:bg-amber-500/10 transition-colors">
+                {uploading ? (
+                  <Loader2 className="w-6 h-6 text-amber-400 animate-spin" />
+                ) : (
+                  <ImagePlus className="w-6 h-6 text-amber-400" />
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                  className="hidden"
+                  disabled={uploading}
+                />
+              </label>
+            </div>
+          </div>
+
+          {error && (
+            <div className="bg-red-500/20 border border-red-400/40 rounded-lg px-3 py-2 text-red-200 text-sm">
+              {error}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-4 py-3 border-t border-amber-400/20">
+          <motion.button
+            onClick={handleSave}
+            disabled={saving || !summary.trim()}
+            whileTap={{ scale: 0.98 }}
+            className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {saving ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <>
+                <Check className="w-5 h-5" />
+                Guardar resumen
+              </>
+            )}
+          </motion.button>
+          <p className="text-amber-200/50 text-xs text-center mt-2">
+            Después podrás publicarlo en novedades para compartirlo con la comunidad
+          </p>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// =============================================================================
+// FORMULARIO CREAR EVENTO
+// =============================================================================
 
 function CreateEventoForm({
   tipo,

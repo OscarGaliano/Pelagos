@@ -32,9 +32,10 @@ import type { Dive } from '@/lib/types';
 import { formatPeriodRange, getMoonPhase, getMoonPhaseLabel, getSolunarPeriods } from '@/lib/solunar';
 import { ensureAbsoluteUrl } from '@/lib/urlUtils';
 import { MoonPhaseIcon } from '@/app/components/MoonPhaseIcon';
-import { BarChart2, Calendar, ChevronLeft, ChevronRight, ChevronUp, Fish, MapPin, Pencil, Trash2, Waves, Wind } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, ChevronUp, Fish, MapPin, Pencil, Trash2, Waves, Wind } from 'lucide-react';
+import { CatchMatchesSection } from './CatchMatchesSection';
 import { motion } from 'motion/react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 const ESPECIES_FIJAS = ['Dorada', 'Lubina', 'Sargo', 'Mero', 'Dentón', 'Limón'] as const;
 
@@ -120,6 +121,7 @@ function DiveDetailWindow({ dive, onClose, onEdit, onDelete, onImageView }: Dive
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="bg-[#0c1f3a] border-cyan-400/20 text-white max-w-2xl w-[calc(100%-2rem)] max-h-[90vh] overflow-hidden p-0 flex flex-col">
+        <DialogTitle className="sr-only">Detalle de jornada</DialogTitle>
         <div className="sticky top-0 z-10 backdrop-blur-xl bg-[#0c1f3a]/95 border-b border-cyan-400/20 px-4 py-3 pr-14 flex items-center justify-between">
           <h2 className="text-white font-semibold text-lg">Detalle de jornada</h2>
         </div>
@@ -309,30 +311,7 @@ export function DiveLogScreen({ onNavigate }: DiveLogScreenProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [imageViewerUrl, setImageViewerUrl] = useState<string | null>(null);
   const [detailDive, setDetailDive] = useState<DiveWithSpot | null>(null);
-  const [showCoincidencias, setShowCoincidencias] = useState(false);
   const [editingDive, setEditingDive] = useState<DiveWithSpot | null>(null);
-
-  /** Agregado por especie: total capturas, nº de jornadas donde aparece */
-  const coincidencias = useMemo(() => {
-    const bySpecies = new Map<string, { total: number; diveIds: Set<string> }>();
-    for (const dive of dives) {
-      for (const c of dive.catches ?? []) {
-        const s = c.species?.trim();
-        if (!s) continue;
-        const curr = bySpecies.get(s) ?? { total: 0, diveIds: new Set<string>() };
-        curr.total++;
-        curr.diveIds.add(dive.id);
-        bySpecies.set(s, curr);
-      }
-    }
-    return Array.from(bySpecies.entries())
-      .map(([species, { total, diveIds }]) => ({
-        species,
-        totalCount: total,
-        jornadasCount: diveIds.size,
-      }))
-      .sort((a, b) => b.totalCount - a.totalCount);
-  }, [dives]);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -466,49 +445,13 @@ export function DiveLogScreen({ onNavigate }: DiveLogScreenProps) {
           </div>
         ) : (
           <div className="space-y-8">
-            {/* Coincidencias entre capturas — cuadro apartado */}
-            {coincidencias.length > 0 && (
-              <div className="backdrop-blur-xl rounded-2xl border-2 border-amber-400/30 overflow-hidden bg-gradient-to-br from-amber-500/10 to-orange-500/10">
-                <button
-                  type="button"
-                  onClick={() => setShowCoincidencias(!showCoincidencias)}
-                  className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left"
-                >
-                  <div className="flex items-center gap-2">
-                    <BarChart2 className="w-5 h-5 text-amber-400" />
-                    <span className="text-white font-medium">Coincidencias entre capturas</span>
-                  </div>
-                  <ChevronUp
-                    className={`w-5 h-5 text-amber-400 transition-transform shrink-0 ${showCoincidencias ? '' : 'rotate-180'}`}
-                  />
-                </button>
-                {showCoincidencias && (
-                  <div className="border-t border-amber-400/20 px-4 py-4">
-                    <p className="text-amber-200/80 text-xs mb-3">
-                      Especies capturadas a lo largo de tus jornadas
-                    </p>
-                    <div className="space-y-2">
-                      {coincidencias.map((c) => (
-                        <div
-                          key={c.species}
-                          className="flex items-center justify-between py-2 px-3 rounded-xl bg-white/5 border border-amber-400/20"
-                        >
-                          <span className="text-white font-medium">{c.species}</span>
-                          <div className="flex items-center gap-4 text-sm">
-                            <span className="text-amber-200/90">
-                              {c.totalCount} captura{c.totalCount !== 1 ? 's' : ''}
-                            </span>
-                            <span className="text-amber-400/90">
-                              en {c.jornadasCount} jornada{c.jornadasCount !== 1 ? 's' : ''}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+            {/* Coincidencias entre capturas — predicciones basadas en condiciones similares */}
+            <CatchMatchesSection
+              onViewDive={(diveId) => {
+                const dive = dives.find(d => d.id === diveId);
+                if (dive) setDetailDive(dive);
+              }}
+            />
 
             {/* Registros de jornada — sección separada */}
             <div>
@@ -591,6 +534,7 @@ export function DiveLogScreen({ onNavigate }: DiveLogScreenProps) {
 
       <Dialog open={!!imageViewerUrl} onOpenChange={(open) => !open && setImageViewerUrl(null)}>
         <DialogContent className="bg-transparent border-0 shadow-none max-w-[95vw] max-h-[95vh] p-0">
+          <DialogTitle className="sr-only">Ver imagen</DialogTitle>
           {imageViewerUrl && (
             <img
               src={imageViewerUrl}
